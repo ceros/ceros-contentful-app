@@ -1,0 +1,2 @@
+- form validation (valid Ceros link? vanity url?)
+- if 404, display error message
