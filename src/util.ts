@@ -31,7 +31,7 @@ export async function getExperienceMetadata(experienceUrl: string): Promise<Oemb
     setProviderList(providers)
 
     // Parse URL
-    // Regular expression to remove the /p/1 from the end of a URL like https://view.ceros.com/internal-ryan-hefner/template/p/1
+    // Regular expression to remove the /p/1 from the end of a URL like https://view.ceros.com/account/experience/p/1
     const regex = /(https:\/\/view\.ceros\.com\/[a-zA-Z0-9-_]+\/[a-zA-Z0-9-_]+)(?:.*)$/
     let result = regex.exec(experienceUrl)
 
