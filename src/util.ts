@@ -1,52 +1,40 @@
-import { extract, setProviderList } from '@extractus/oembed-extractor'
+import { CMAClient, ConfigAppSDK } from '@contentful/app-sdk'
+import { DEFAULT_CONTENT_TYPE, DEFAULT_CONTENT_TYPE_ID } from './config'
 
-export interface OembedMetadata {
-    type: string
-    url: string
-    title: string
-    html: string
-    width: number
-    height: number
-    provider_name: 'Ceros'
-    provider_url: 'https://ceros.com'
-    version: '1.0'
-    embedType: 'full-height' | 'scrollable'
+// Handles errors by setting the error message and logging the error
+export function handleError(message: string, setErrorMessage: Function, error?: any) {
+    setErrorMessage(message)
+    console.error(message)
+    if (error) {
+        console.error(error.message)
+    }
 }
 
-export async function getExperienceMetadata(experienceUrl: string): Promise<OembedMetadata | null> {
-    // Set up the oembed provider list
-    const providers = [
+// Creates the default content type and assign the app as an entry editor for all fields
+export async function createDefaultContentType(sdk: ConfigAppSDK, cma: CMAClient) {
+    // Create the content type
+    const createdContentType = await cma.contentType.createWithId(
         {
-            provider_name: 'Ceros',
-            provider_url: 'https://www.ceros.com/',
-            endpoints: [
-                {
-                    schemes: ['https://view.ceros.com/*'],
-                    url: 'https://view.ceros.com/oembed',
-                    discovery: true,
-                },
-            ],
+            spaceId: sdk.ids.space,
+            environmentId: sdk.ids.environment,
+            contentTypeId: DEFAULT_CONTENT_TYPE_ID,
         },
-    ]
-    setProviderList(providers)
+        DEFAULT_CONTENT_TYPE
+    )
+    await cma.contentType.publish({ contentTypeId: createdContentType.sys.id }, createdContentType)
+    return createdContentType.sys.id
+}
 
-    // Parse URL
-    // Regular expression to remove the /p/1 from the end of a URL like https://view.ceros.com/account/experience/p/1
-    const regex = /(https:\/\/view\.ceros\.com\/[a-zA-Z0-9-_]+\/[a-zA-Z0-9-_]+)(?:.*)$/
-    let result = regex.exec(experienceUrl)
-
-    if (!result) {
-        console.trace(`Experience URL '${experienceUrl}' isn't valid. Make sure it looks like
-        'https://view.ceros.com/account/experience'`)
-        return null
-    }
-
-    // Fetch the oembed data
-    try {
-        const oembed = await extract(result[1])
-        return oembed as OembedMetadata
-    } catch (err) {
-        console.trace(err)
-        return null
-    }
+// Fetches all content types in the space and set them in state
+export async function fetchAllContentTypes(
+    cma: CMAClient,
+    spaceId: string,
+    environmentId: string,
+    setAllContentTypes: Function
+) {
+    const contentTypes = await cma.contentType.getMany({
+        spaceId: spaceId,
+        environmentId: environmentId,
+    })
+    setAllContentTypes(contentTypes.items)
 }

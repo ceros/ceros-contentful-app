@@ -1,13 +1,14 @@
 import { ConfigAppSDK } from '@contentful/app-sdk'
 import { Box, Checkbox, Flex, Form, FormControl, Heading, Note, Paragraph, Select } from '@contentful/f36-components'
 import { useCMA, useSDK } from '@contentful/react-apps-toolkit'
-import { ContentTypeProps } from 'contentful-management'
 import { css } from '@emotion/css'
+import { ContentTypeProps } from 'contentful-management'
 import React, { useCallback, useEffect, useState } from 'react'
 
 import cerosLogo from '../assets/ceros-logo.svg'
-import { DEFAULT_CONTENT_TYPE_NAME, DEFAULT_CONTENT_TYPE_ID, DEFAULT_CONTENT_TYPE } from '../config'
+import { DEFAULT_CONTENT_TYPE, DEFAULT_CONTENT_TYPE_ID, DEFAULT_CONTENT_TYPE_NAME } from '../config'
 import styles from '../styles'
+import { createDefaultContentType, fetchAllContentTypes, handleError } from '../util'
 
 // Define the type for the app installation parameters
 export interface AppInstallationParameters {
@@ -20,6 +21,15 @@ export interface AppInstallationParameters {
 const ConfigScreen = () => {
     const createDefaultContentTypeValue = 'create-default'
 
+    // Access to the SDK and CMA provided by the @contentful/react-apps-toolkit
+    const sdk = useSDK<ConfigAppSDK>()
+    const cma = useCMA()
+
+    // State to store various UI elements
+    const [selectedContentType, setSelectedContentType] = useState<ContentTypeProps | null>(null)
+    const [assignAsEntryEditor, setAssignAsEntryEditor] = useState<boolean>(false)
+    const [errorMessage, setErrorMessage] = useState<string | null>(null)
+
     // State to store the app installation parameters
     const [parameters, setParameters] = useState<AppInstallationParameters>({
         contentTypeId: '',
@@ -28,96 +38,25 @@ const ConfigScreen = () => {
         embedCodeFieldId: '',
     })
 
+    useEffect(() => {
+        ;(async () => {
+            const currentParameters = await sdk.app.getParameters()
+            if (currentParameters) {
+                setParameters(currentParameters as AppInstallationParameters)
+            }
+
+            sdk.app.setReady()
+            console.debug('Ceros app marked as ready.')
+        })()
+    }, [sdk])
+
     // State to store content types
     const [allContentTypes, setAllContentTypes] = useState<ContentTypeProps[]>([])
 
-    // State to store the selected content type
-    const [selectedContentType, setSelectedContentType] = useState<ContentTypeProps | null>(null)
-
-    // State to store whether this app should be assigned as an entry editor for the selected content type
-    const [assignAsEntryEditor, setAssignAsEntryEditor] = useState<boolean>(false)
-
-    // State to store error message
-    const [errorMessage, setErrorMessage] = useState<string | null>(null)
-
-    // Access to the SDK and CMA provided by the @contentful/react-apps-toolkit
-    const sdk = useSDK<ConfigAppSDK>()
-    const cma = useCMA()
-
-    // Handles errors by setting the error message and logging the error
-    const handleError = (message: string, error?: any) => {
-        setErrorMessage(message)
-        console.error(message)
-        if (error) {
-            console.error(error.message)
-        }
-    }
-
-    // Function to create the default content type and assign the app as an entry editor for all fields
-    const createDefaultContentType = useCallback(async () => {
-        // Create the content type
-        const createdContentType = await cma.contentType.createWithId(
-            {
-                spaceId: sdk.ids.space,
-                environmentId: sdk.ids.environment,
-                contentTypeId: DEFAULT_CONTENT_TYPE_ID,
-            },
-            DEFAULT_CONTENT_TYPE
-        )
-        await cma.contentType.publish({ contentTypeId: createdContentType.sys.id }, createdContentType)
-
-        return createdContentType.sys.id
-    }, [cma, sdk])
-
-    // Function to create the default content type and assign the app as an entry editor for all fields
-    const assignEditorToContentType = useCallback(
-        async (contentTypeId: string) => {
-            // Fetch the editor interface for the created content type
-            const editorInterface = await cma.editorInterface.get({
-                spaceId: sdk.ids.space,
-                environmentId: sdk.ids.environment,
-                contentTypeId: contentTypeId,
-            })
-
-            // If editors property is not initialized, initialize it as an empty array
-            editorInterface.editors = editorInterface.editors || []
-
-            // Check if the app is already an editor
-            const isAlreadyEditor = editorInterface.editors.some(
-                (editor) => editor.widgetNamespace === 'app' && editor.widgetId === sdk.ids.app
-            )
-
-            // If the app is already an editor, do nothing
-            if (isAlreadyEditor) {
-                return
-            }
-
-            // Otherwise, add the app as an editor
-            editorInterface.editors.push({
-                widgetNamespace: 'app',
-                widgetId: sdk.ids.app,
-            })
-
-            // Update the editor interface with the new configuration including the current app as an entry editor
-            await cma.editorInterface.update(
-                {
-                    spaceId: sdk.ids.space,
-                    environmentId: sdk.ids.environment,
-                    contentTypeId: contentTypeId,
-                },
-                editorInterface
-            )
-        },
-        [cma, sdk]
-    )
-
-    // Fetch all content types
-    const fetchAllContentTypes = useCallback(async () => {
-        const contentTypes = await cma.contentType.getMany({
-            spaceId: sdk.ids.space,
-            environmentId: sdk.ids.environment,
-        })
-        setAllContentTypes(contentTypes.items)
+    useEffect(() => {
+        ;(async () => {
+            fetchAllContentTypes(cma, sdk.ids.space, sdk.ids.environment, setAllContentTypes)
+        })()
     }, [cma, sdk.ids.space, sdk.ids.environment])
 
     // Handles when a user clicks either "Install" or "Save" but before an app is installed or updated
@@ -125,14 +64,15 @@ const ConfigScreen = () => {
         if (parameters.contentTypeId === createDefaultContentTypeValue) {
             // Create default content type
             try {
-                parameters.contentTypeId = await createDefaultContentType()
+                parameters.contentTypeId = await createDefaultContentType(sdk, cma)
                 parameters.titleFieldId = DEFAULT_CONTENT_TYPE.fields[0].id
                 parameters.urlFieldId = DEFAULT_CONTENT_TYPE.fields[1].id
                 parameters.embedCodeFieldId = DEFAULT_CONTENT_TYPE.fields[2].id
-                fetchAllContentTypes()
+                fetchAllContentTypes(cma, sdk.ids.space, sdk.ids.environment, setAllContentTypes)
             } catch (error) {
                 handleError(
                     'An unexpected error was encountered while creating the content type. Please try again.',
+                    setErrorMessage,
                     error
                 )
                 return false
@@ -143,23 +83,34 @@ const ConfigScreen = () => {
             !parameters.urlFieldId ||
             !parameters.embedCodeFieldId
         ) {
-            handleError('All fields must be filled out before saving.')
+            handleError('All fields must be filled out before saving.', setErrorMessage)
             return false
         } else if (
             parameters.titleFieldId === parameters.embedCodeFieldId ||
             parameters.titleFieldId === parameters.urlFieldId ||
             parameters.embedCodeFieldId === parameters.urlFieldId
         ) {
-            handleError('Title field, embed code field, and URL field cannot be the same.')
+            handleError('Title field, embed code field, and URL field cannot be the same.', setErrorMessage)
             return false
         }
 
+        var state = await sdk.app.getCurrentState()
+
+        // If the app is being assigned as an entry editor, add it to the state
         if (assignAsEntryEditor) {
             try {
-                await assignEditorToContentType(parameters.contentTypeId)
+                state = {
+                    EditorInterface: {
+                        ...state?.EditorInterface,
+                        [parameters.contentTypeId]: {
+                            editors: { position: 0 },
+                        },
+                    },
+                }
             } catch (error) {
                 handleError(
                     'An unexpected error was encountered while assigning the entry editor. Please try again.',
+                    setErrorMessage,
                     error
                 )
                 return false
@@ -169,44 +120,15 @@ const ConfigScreen = () => {
         setErrorMessage(null)
         return {
             parameters: parameters,
-            targetState: await sdk.app.getCurrentState(),
+            targetState: state,
         }
-    }, [
-        assignAsEntryEditor,
-        assignEditorToContentType,
-        createDefaultContentType,
-        fetchAllContentTypes,
-        parameters,
-        sdk.app,
-    ])
+    }, [assignAsEntryEditor, cma, parameters, sdk])
 
-    // Sets the on configure handler
     useEffect(() => {
         sdk.app.onConfigure(() => onConfigure())
     }, [sdk, onConfigure])
 
-    // Fetch current app installation parameters
-    useEffect(() => {
-        ;(async () => {
-            console.log('Loading current app installation parameters...')
-            const currentParameters: AppInstallationParameters | null = await sdk.app.getParameters()
-
-            if (currentParameters) {
-                setParameters(currentParameters)
-            }
-
-            sdk.app.setReady()
-        })()
-    }, [sdk])
-
-    // Fetch available content types
-    useEffect(() => {
-        ;(async () => {
-            fetchAllContentTypes()
-        })()
-    }, [cma, sdk.ids.environment, sdk.ids.space, fetchAllContentTypes])
-
-    // Whenever content type changes, update other things
+    // Whenever content type changes, update some UI elements
     useEffect(() => {
         if (!parameters.contentTypeId) {
             setSelectedContentType(null)
@@ -220,13 +142,13 @@ const ConfigScreen = () => {
             return
         }
 
-        // Save the selected content type
+        // Find the selected content type (given the selected ID)
         const selectedContentType = allContentTypes.find(
             (contentType) => contentType.sys.id === parameters.contentTypeId
         )
 
         if (allContentTypes.length > 0 && !selectedContentType) {
-            handleError('The configured content type cannot be found. Please select a new one.')
+            handleError('The configured content type cannot be found. Please select a new one.', setErrorMessage)
             return
         }
         setSelectedContentType(selectedContentType || null)
