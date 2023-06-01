@@ -131,10 +131,7 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
         ;(async () => {
             // Determine if the embed code is for a Ceros experience
             setIsCerosExperience(
-                Boolean(
-                    embedCode.includes('class="ceros-experience"') &&
-                        embedCode.includes('https://view.ceros.com/scroll-proxy.min.js')
-                )
+                Boolean(embedCode.includes('class="ceros-experience"') && embedCode.includes('https://view.ceros.com/'))
             )
         })()
     }, [embedCode])
@@ -154,11 +151,13 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
 
             {isCerosExperience ? (
                 <>
-                    <Paragraph>A Ceros experience is linked to this entry. You can see a preview of it below.</Paragraph>
+                    <Paragraph>
+                        A Ceros experience is linked to this entry. You can see a preview of it below.
+                    </Paragraph>
 
                     <Paragraph>
-                        If you recently changed the canvas size of the experience or added a tablet or mobile variant, click
-                        "Refresh Embed Code" to pull the latest changes.
+                        If you recently changed the canvas size of the experience or added a tablet or mobile variant,
+                        click "Refresh Embed Code" to pull the latest changes.
                     </Paragraph>
 
                     <Flex>
@@ -194,14 +193,13 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
                 <>
                     <Paragraph>The embed code in this entry doesn't look like a Ceros experience:</Paragraph>
 
-                    <Box marginTop='spacingL' marginBottom='spacingL' style={{ backgroundColor: tokens.gray200 }}>
-                    <code>{embedCode}</code>
+                    <Box marginTop="spacingL" marginBottom="spacingL" style={{ backgroundColor: tokens.gray200 }}>
+                        <code>{embedCode}</code>
                     </Box>
-                    
 
                     <Paragraph>
-                        If want to link a Ceros experience to this entry, click "Reset Entry" and then enter
-                        your published experience URL.
+                        If want to link a Ceros experience to this entry, click "Reset Entry" and then enter your
+                        published experience URL.
                     </Paragraph>
 
                     <Form onSubmit={unlinkExperience}>
