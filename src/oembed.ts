@@ -41,10 +41,15 @@ export async function getExperienceMetadata(experienceUrl: string): Promise<Oemb
         return null
     }
 
+    const canonicalUrl = result[1]
+
     // Fetch the oembed data
     try {
-        const oembed = await extract(result[1])
-        return oembed as OembedMetadata
+        const metadata = await extract(canonicalUrl) as OembedMetadata
+        if (!metadata.url) {
+          metadata.url = canonicalUrl
+        }
+        return metadata
     } catch (err) {
         console.trace(err)
         return null
