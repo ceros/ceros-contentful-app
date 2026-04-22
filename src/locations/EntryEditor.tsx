@@ -131,7 +131,10 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
         ;(async () => {
             // Determine if the embed code is for a Ceros experience
             setIsCerosExperience(
-                Boolean(embedCode.includes('class="ceros-experience"') && embedCode.includes('https://view.ceros.com/'))
+                Boolean(
+                  (embedCode.includes('class="ceros-experience"') && embedCode.includes('https://view.ceros.com/')) ||
+                  embedCode.includes('.ceros.site/')
+                )
             )
         })()
     }, [embedCode])

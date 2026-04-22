@@ -14,9 +14,38 @@ export interface OembedMetadata {
 }
 
 export async function getExperienceMetadata(experienceUrl: string): Promise<OembedMetadata | null> {
-    // Set up the oembed provider list
-    const providers = [
-        {
+    // Parse URL first so we can build the provider list dynamically
+    // Matches view.ceros.com/account/experience or account.ceros.site/experience
+    const regex = /(https:\/\/(?:view\.ceros\.com\/[a-zA-Z0-9-_]+\/[a-zA-Z0-9-_]+|[a-zA-Z0-9-_]+\.ceros\.site\/[a-zA-Z0-9-_]+))(?:.*)$/
+    let result = regex.exec(experienceUrl)
+
+    if (!result) {
+        console.trace(`Experience URL '${experienceUrl}' isn't valid. Make sure it looks like
+        'https://view.ceros.com/account/experience' or 'https://account.ceros.site/experience'`)
+        return null
+    }
+
+    const canonicalUrl = result[1]
+
+    // Build the provider list conditionally based on the URL type
+    const providers: Parameters<typeof setProviderList>[0] = []
+
+    const cerosSiteMatch = /^https:\/\/([a-zA-Z0-9-_]+)\.ceros\.site\//.exec(experienceUrl)
+    if (cerosSiteMatch) {
+        const account = cerosSiteMatch[1]
+        providers.push({
+            provider_name: 'Ceros',
+            provider_url: 'https://www.ceros.com/',
+            endpoints: [
+                {
+                    schemes: [`https://${account}.ceros.site/*`],
+                    url: `https://${account}.ceros.site/oembed`,
+                    discovery: true,
+                },
+            ],
+        })
+    } else {
+        providers.push({
             provider_name: 'Ceros',
             provider_url: 'https://www.ceros.com/',
             endpoints: [
@@ -26,22 +55,10 @@ export async function getExperienceMetadata(experienceUrl: string): Promise<Oemb
                     discovery: true,
                 },
             ],
-        },
-    ]
-    setProviderList(providers)
-
-    // Parse URL
-    // Regular expression to remove the /p/1 from the end of a URL like https://view.ceros.com/account/experience/p/1
-    const regex = /(https:\/\/view\.ceros\.com\/[a-zA-Z0-9-_]+\/[a-zA-Z0-9-_]+)(?:.*)$/
-    let result = regex.exec(experienceUrl)
-
-    if (!result) {
-        console.trace(`Experience URL '${experienceUrl}' isn't valid. Make sure it looks like
-        'https://view.ceros.com/account/experience'`)
-        return null
+        })
     }
 
-    const canonicalUrl = result[1]
+    setProviderList(providers)
 
     // Fetch the oembed data
     try {
