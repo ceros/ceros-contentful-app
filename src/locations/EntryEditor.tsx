@@ -1,7 +1,7 @@
 import { EditorAppSDK, EntryAPI } from '@contentful/app-sdk'
 import { Box, Button, Flex, Form, FormControl, Note, Paragraph, TextInput } from '@contentful/f36-components'
 import { useSDK } from '@contentful/react-apps-toolkit'
-import React, { Dispatch, useEffect, useState } from 'react'
+import React, { Dispatch, useEffect, useRef, useState } from 'react'
 
 import cerosLogo from '../assets/ceros-logo.svg'
 import styles from '../styles'
@@ -139,6 +139,14 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
         })()
     }, [embedCode])
 
+    const embedRef = useRef<HTMLDivElement>(null)
+    useEffect(() => {
+        const container = embedRef.current
+        if (!container || !embedCode) return
+        container.innerHTML = ''
+        container.appendChild(document.createRange().createContextualFragment(embedCode))
+    }, [embedCode, isCerosExperience])
+
     return (
         <>
             {isRefreshError && (
@@ -190,7 +198,7 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
                         </Box>
                     </Flex>
 
-                    <div className={styles.experienceEmbed} dangerouslySetInnerHTML={{ __html: embedCode }}></div>
+                    <div className={styles.experienceEmbed} ref={embedRef}></div>
                 </>
             ) : (
                 <>
