@@ -1,5 +1,5 @@
 import { ConfigAppSDK } from '@contentful/app-sdk'
-import { Box, Checkbox, Flex, Form, FormControl, Heading, Note, Paragraph, Select } from '@contentful/f36-components'
+import { Box, Checkbox, Flex, Form, FormControl, Heading, Note, Paragraph, Select, TextInput } from '@contentful/f36-components'
 import { useSDK } from '@contentful/react-apps-toolkit'
 import { css } from 'emotion'
 import { ContentTypeProps } from 'contentful-management'
@@ -16,6 +16,7 @@ export interface AppInstallationParameters {
     titleFieldId: string
     urlFieldId: string
     embedCodeFieldId: string
+    cerosApiKey?: string
 }
 
 const ConfigScreen = () => {
@@ -36,6 +37,7 @@ const ConfigScreen = () => {
         titleFieldId: '',
         urlFieldId: '',
         embedCodeFieldId: '',
+        cerosApiKey: '',
     })
 
     useEffect(() => {
@@ -298,6 +300,21 @@ const ConfigScreen = () => {
                                 ))}
                         </Select>
                         <FormControl.HelpText>This field needs to be of the type "Text".</FormControl.HelpText>
+                    </FormControl>
+
+                    <FormControl>
+                        <FormControl.Label>Ceros API Key</FormControl.Label>
+                        <TextInput
+                            type="password"
+                            value={parameters.cerosApiKey ?? ''}
+                            placeholder="Enter your Ceros REST API key"
+                            onChange={(e) => setParameters((p) => ({ ...p, cerosApiKey: e.target.value }))}
+                        />
+                        <FormControl.HelpText>
+                            Used to power the Experience Chooser. The key is stored securely and never exposed to the
+                            browser — it is only accessible inside the Contentful Function. Run{' '}
+                            <code>npm run create-app-action</code> once after deploying to register the function.
+                        </FormControl.HelpText>
                     </FormControl>
                 </Form>
             </Box>
