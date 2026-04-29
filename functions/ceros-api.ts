@@ -22,6 +22,7 @@ type FunctionContext = {
 export interface FolderNode {
   resourceId: string
   name: string
+  parentId?: string
 }
 
 export interface ExperienceNode {
@@ -70,10 +71,14 @@ function normalizeArray(data: any): any[] {
 function normalizeFolderTree(data: any): FolderNode[] {
   console.log('Normalize folder tree')
   return normalizeArray(data)
-    .map((f: any) => ({
-      resourceId: String(f.resourceId ?? f.id ?? ''),
-      name: String(f.name ?? f.title ?? ''),
-    }))
+    .map((f: any) => {
+      const parentRaw = f.parentResourceId ?? f.parentId ?? f.parent ?? null
+      return {
+        resourceId: String(f.resourceId ?? f.id ?? ''),
+        name: String(f.name ?? f.title ?? ''),
+        parentId: parentRaw != null ? String(parentRaw) : undefined,
+      }
+    })
     .filter((f: FolderNode) => f.resourceId && f.name !== 'Account Templates')
 }
 
