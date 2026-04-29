@@ -5,10 +5,8 @@ import {
     Flex,
     Form,
     FormControl,
-    Modal,
     Note,
     Paragraph,
-    Spinner,
     TextInput,
 } from '@contentful/f36-components'
 import { useSDK } from '@contentful/react-apps-toolkit'
@@ -19,250 +17,12 @@ import styles from '../styles'
 import { getExperienceMetadata } from '../oembed'
 import { AppInstallationParameters } from './ConfigScreen'
 import tokens from '@contentful/f36-tokens'
-
-interface FolderNode {
-    resourceId: string
-    name: string
-}
-
-interface ExperienceNode {
-    resourceId: string
-    name: string
-    thumbnailUrl?: string
-}
-
-interface SelectedExperience {
-    name: string
-    url: string
-    embedCode: string
-}
+import { ExperiencePicker, SelectedExperience } from './ExperiencePicker'
 
 interface StateProps {
     entry: EntryAPI
     setLinked: Dispatch<any>
     parameters: AppInstallationParameters
-}
-
-function ExperienceChooserModal({
-    isShown,
-    onClose,
-    onSelect,
-}: {
-    isShown: boolean
-    onClose: () => void
-    onSelect: (experience: SelectedExperience) => void
-}) {
-    const sdk = useSDK<EditorAppSDK>()
-    const [appActionId, setAppActionId] = useState<string | null>(null)
-    const [view, setView] = useState<'folders' | 'experiences'>('folders')
-    const [folders, setFolders] = useState<FolderNode[]>([])
-    const [selectedFolder, setSelectedFolder] = useState<FolderNode | null>(null)
-    const [experiences, setExperiences] = useState<ExperienceNode[]>([])
-    const [loading, setLoading] = useState(false)
-    const [error, setError] = useState<string | null>(null)
-
-    const callFunction = async (actionId: string, params: Record<string, unknown>) => {
-        const call = await sdk.cma.appActionCall.createWithResult(
-            {
-                spaceId: sdk.ids.space,
-                environmentId: sdk.ids.environment,
-                appDefinitionId: sdk.ids.app || '',
-                appActionId: actionId,
-            },
-            { parameters: params }
-        )
-
-        console.debug('[CerosApi] call result:', call)
-
-        if (call.sys.status === 'failed') {
-            const err = (call.sys as any).error
-            throw new Error(`Function call failed: ${err?.message ?? JSON.stringify(err)}`)
-        }
-
-        return (call.sys as any).result as Record<string, unknown>
-    }
-
-    // On open: find the App Action, then load the folder tree.
-    useEffect(() => {
-        if (!isShown) {
-            setView('folders')
-            setFolders([])
-            setSelectedFolder(null)
-            setExperiences([])
-            setError(null)
-            setAppActionId(null)
-            return
-        }
-
-        setLoading(true)
-        setError(null)
-
-        ;(async () => {
-            try {
-                const actionsResponse = await sdk.cma.appAction.getMany({
-                    organizationId: sdk.ids.organization,
-                    appDefinitionId: sdk.ids.app || '',
-                })
-
-                const cerosAction = actionsResponse.items.find((a) => a.name === 'CerosApi')
-                if (!cerosAction) {
-                    setError('The CerosApi App Action is not set up. Run "npm run create-app-action" after deploying.')
-                    return
-                }
-
-                const actionId = cerosAction.sys.id
-                setAppActionId(actionId)
-
-                const data = await callFunction(actionId, { action: 'getFolderTree' })
-                if (data.error) throw new Error(String(data.error))
-
-                setFolders((data.folders as FolderNode[]) ?? [])
-            } catch (err) {
-                console.error('[CerosApi] getFolderTree error:', err)
-                setError(err instanceof Error ? err.message : String(err))
-            } finally {
-                setLoading(false)
-            }
-        })()
-    }, [isShown]) // eslint-disable-line react-hooks/exhaustive-deps
-
-    const handleFolderClick = async (folder: FolderNode) => {
-        if (!appActionId) return
-        setSelectedFolder(folder)
-        setView('experiences')
-        setLoading(true)
-        setExperiences([])
-        setError(null)
-
-        try {
-            const data = await callFunction(appActionId, {
-                action: 'getFolderExperiences',
-                folderId: folder.resourceId,
-            })
-            if (data.error) throw new Error(String(data.error))
-            setExperiences((data.experiences as ExperienceNode[]) ?? [])
-        } catch (err) {
-            console.error('[CerosApi] getFolderExperiences error:', err)
-            setError(err instanceof Error ? err.message : String(err))
-        } finally {
-            setLoading(false)
-        }
-    }
-
-    const handleExperienceClick = async (exp: ExperienceNode) => {
-        if (!appActionId) return
-        setLoading(true)
-        setError(null)
-
-        try {
-            const data = await callFunction(appActionId, {
-                action: 'getEmbedCode',
-                resourceId: exp.resourceId,
-            })
-            if (data.error) throw new Error(String(data.error))
-            onSelect({ name: exp.name, url: String(data.url ?? ''), embedCode: String(data.embedCode ?? '') })
-        } catch (err) {
-            console.error('[CerosApi] getEmbedCode error:', err)
-            setError(err instanceof Error ? err.message : String(err))
-            setLoading(false)
-        }
-    }
-
-    const title =
-        view === 'experiences' && selectedFolder
-            ? `Experiences in "${selectedFolder.name}"`
-            : 'Choose a Ceros Experience'
-
-    return (
-        <Modal isShown={isShown} onClose={onClose} size="large">
-            <Modal.Header title={title} onClose={onClose} />
-            <Modal.Content>
-                {loading && (
-                    <Flex justifyContent="center" alignItems="center" style={{ minHeight: '120px' }}>
-                        <Spinner size="large" />
-                    </Flex>
-                )}
-
-                {!loading && error && <Note variant="negative">{error}</Note>}
-
-                {!loading && !error && view === 'folders' && (
-                    <>
-                        {folders.length === 0 && <Paragraph>No folders found.</Paragraph>}
-                        {folders.length > 0 && (
-                            <div>
-                                {folders.map((folder) => (
-                                    <div
-                                        key={folder.resourceId}
-                                        className={styles.folderRow}
-                                        onClick={() => handleFolderClick(folder)}
-                                        role="button"
-                                        tabIndex={0}
-                                        onKeyDown={(e) => e.key === 'Enter' && handleFolderClick(folder)}
-                                    >
-                                        {folder.name}
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </>
-                )}
-
-                {!loading && !error && view === 'experiences' && (
-                    <>
-                        {experiences.length === 0 && (
-                            <Paragraph>No published experiences in this folder.</Paragraph>
-                        )}
-                        {experiences.length > 0 && (
-                            <div className={styles.experienceGrid}>
-                                {experiences.map((exp) => (
-                                    <div
-                                        key={exp.resourceId}
-                                        className={styles.experienceCard}
-                                        onClick={() => handleExperienceClick(exp)}
-                                        role="button"
-                                        tabIndex={0}
-                                        onKeyDown={(e) => e.key === 'Enter' && handleExperienceClick(exp)}
-                                    >
-                                        {exp.thumbnailUrl ? (
-                                            <img
-                                                src={exp.thumbnailUrl}
-                                                alt={exp.name}
-                                                className={styles.experienceThumbnail}
-                                            />
-                                        ) : (
-                                            <div className={styles.experienceThumbnailPlaceholder} />
-                                        )}
-                                        <div className={styles.experienceCardLabel}>{exp.name}</div>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </>
-                )}
-            </Modal.Content>
-            <Modal.Controls>
-                <>
-                    {view === 'experiences' && (
-                        <Button
-                            variant="secondary"
-                            isDisabled={loading}
-                            onClick={() => {
-                                setView('folders')
-                                setSelectedFolder(null)
-                                setExperiences([])
-                                setError(null)
-                            }}
-                        >
-                            Back to Folders
-                        </Button>
-                    )}
-                    <Button variant="secondary" onClick={onClose}>
-                        Cancel
-                    </Button>
-                </>
-            </Modal.Controls>
-        </Modal>
-    )
 }
 
 function EmptyState({ entry, setLinked, parameters }: StateProps) {
@@ -309,7 +69,7 @@ function EmptyState({ entry, setLinked, parameters }: StateProps) {
 
     return (
         <>
-            <ExperienceChooserModal
+            <ExperiencePicker
                 isShown={isChooserOpen}
                 onClose={() => setIsChooserOpen(false)}
                 onSelect={handleSelectExperience}
