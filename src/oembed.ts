@@ -21,7 +21,7 @@ export async function getExperienceMetadata(experienceUrl: string): Promise<Oemb
 
     if (!result) {
         console.trace(`Experience URL '${experienceUrl}' isn't valid. Make sure it looks like
-        'https://view.ceros.com/account/experience' or 'https://account.ceros.site/experience'`)
+        'https://view.ceros.com/account/experience' or 'https://<account>.ceros.site/experience'`)
         return null
     }
 
@@ -31,32 +31,19 @@ export async function getExperienceMetadata(experienceUrl: string): Promise<Oemb
     const providers: Parameters<typeof setProviderList>[0] = []
 
     const cerosSiteMatch = /^https:\/\/([a-zA-Z0-9-_]+)\.ceros\.site\//.exec(experienceUrl)
-    if (cerosSiteMatch) {
-        const account = cerosSiteMatch[1]
-        providers.push({
-            provider_name: 'Ceros',
-            provider_url: 'https://www.ceros.com/',
-            endpoints: [
-                {
-                    schemes: [`https://${account}.ceros.site/*`],
-                    url: `https://${account}.ceros.site/oembed`,
-                    discovery: true,
-                },
-            ],
-        })
-    } else {
-        providers.push({
-            provider_name: 'Ceros',
-            provider_url: 'https://www.ceros.com/',
-            endpoints: [
-                {
-                    schemes: ['https://view.ceros.com/*'],
-                    url: 'https://view.ceros.com/oembed',
-                    discovery: true,
-                },
-            ],
-        })
-    }
+    const host = cerosSiteMatch ? `${cerosSiteMatch[1]}.ceros.site` : 'view.ceros.com'
+
+    providers.push({
+        provider_name: 'Ceros',
+        provider_url: 'https://www.ceros.com/',
+        endpoints: [
+            {
+                schemes: [`https://${host}/*`],
+                url: `https://${host}/oembed`,
+                discovery: true,
+            },
+        ],
+    })
 
     setProviderList(providers)
 
