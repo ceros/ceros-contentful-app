@@ -14,7 +14,6 @@ export interface SelectedExperience {
 interface FolderNode {
     resourceId: string
     name: string
-    parentId?: string
 }
 
 interface ExperienceNode {
@@ -417,15 +416,12 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
 
     const [appActionId, setAppActionId] = useState<string | null>(null)
     const [folders, setFolders] = useState<FolderNode[]>([])
-    // Stack of folders navigated into; last item is current folder
-    const [folderPath, setFolderPath] = useState<FolderNode[]>([])
+    const [currentFolder, setCurrentFolder] = useState<FolderNode | null>(null)
     const [experienceCache, setExperienceCache] = useState<Record<string, FolderCacheEntry>>({})
     const [loading, setLoading] = useState(false)
     const [loadingExpId, setLoadingExpId] = useState<string | null>(null)
     const [error, setError] = useState<string | null>(null)
     const [expError, setExpError] = useState<string | null>(null)
-
-    const currentFolder = folderPath.at(-1) ?? null
 
     const callFunction = async (actionId: string, params: Record<string, unknown>) => {
         const call = await sdk.cma.appActionCall.createWithResult(
@@ -475,7 +471,7 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
     useEffect(() => {
         if (!isShown) {
             setFolders([])
-            setFolderPath([])
+            setCurrentFolder(null)
             setExperienceCache({})
             setError(null)
             setExpError(null)
@@ -522,7 +518,7 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
     }, [isShown, onClose])
 
     const handleFolderOpen = (folder: FolderNode) => {
-        setFolderPath(prev => [...prev, folder])
+        setCurrentFolder(folder)
         setExpError(null)
         // Retry if not in cache or previously errored
         const entry = experienceCache[folder.resourceId]
@@ -532,17 +528,7 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
     }
 
     const handleBack = () => {
-        setFolderPath(prev => prev.slice(0, -1))
-        setExpError(null)
-    }
-
-    const handleNavigateTo = (index: number) => {
-        setFolderPath(prev => prev.slice(0, index + 1))
-        setExpError(null)
-    }
-
-    const handleNavigateToRoot = () => {
-        setFolderPath([])
+        setCurrentFolder(null)
         setExpError(null)
     }
 
@@ -572,10 +558,6 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
 
     const isInFolder = currentFolder !== null
     const cacheEntry = currentFolder ? experienceCache[currentFolder.resourceId] : undefined
-    // Subfolders of the current folder (available immediately from the flat folder tree)
-    const subfolders = currentFolder
-        ? folders.filter(f => f.parentId === currentFolder.resourceId)
-        : []
 
     const bodyContent = () => {
         if (error) {
@@ -589,75 +571,40 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
         if (loading) return <FoldersSkeleton />
 
         if (isInFolder) {
-            const subfoldersSection = subfolders.length > 0 && (
+            if (!cacheEntry || cacheEntry.status === 'loading') return <ExperiencesSkeleton />
+            if (cacheEntry.status === 'error') {
+                return (
+                    <div style={{ padding: '4px 0' }}>
+                        <Note variant="negative">
+                            Failed to load experiences for this folder. Go back and try opening it again.
+                        </Note>
+                    </div>
+                )
+            }
+            if (cacheEntry.experiences.length === 0) return <EmptyFolderState />
+            return (
                 <section style={s.section}>
-                    <div style={s.eyebrow}>Folders</div>
-                    <div style={s.folderGrid}>
-                        {subfolders.map(f => (
-                            <FolderRow key={f.resourceId} folder={f} onOpen={handleFolderOpen} />
+                    {expError && (
+                        <div style={{ marginBottom: 12 }}>
+                            <Note variant="negative">{expError}</Note>
+                        </div>
+                    )}
+                    <div style={s.cardGrid}>
+                        {cacheEntry.experiences.map((exp) => (
+                            <ExperienceCard
+                                key={exp.resourceId}
+                                exp={exp}
+                                loading={loadingExpId === exp.resourceId}
+                                disabled={loadingExpId !== null}
+                                onSelect={handleExperienceClick}
+                            />
                         ))}
                     </div>
                 </section>
             )
-
-            if (!cacheEntry || cacheEntry.status === 'loading') {
-                return (
-                    <>
-                        {subfoldersSection}
-                        <ExperiencesSkeleton />
-                    </>
-                )
-            }
-
-            if (cacheEntry.status === 'error') {
-                return (
-                    <>
-                        {subfoldersSection}
-                        <div style={{ padding: '4px 0' }}>
-                            <Note variant="negative">
-                                Failed to load experiences for this folder. Go back and try opening it again.
-                            </Note>
-                        </div>
-                    </>
-                )
-            }
-
-            if (subfolders.length === 0 && cacheEntry.experiences.length === 0) {
-                return <EmptyFolderState />
-            }
-
-            return (
-                <>
-                    {subfoldersSection}
-                    {cacheEntry.experiences.length > 0 && (
-                        <section style={s.section}>
-                            {expError && (
-                                <div style={{ marginBottom: 12 }}>
-                                    <Note variant="negative">{expError}</Note>
-                                </div>
-                            )}
-                            <div style={s.eyebrow}>Published experiences</div>
-                            <div style={s.cardGrid}>
-                                {cacheEntry.experiences.map((exp) => (
-                                    <ExperienceCard
-                                        key={exp.resourceId}
-                                        exp={exp}
-                                        loading={loadingExpId === exp.resourceId}
-                                        disabled={loadingExpId !== null}
-                                        onSelect={handleExperienceClick}
-                                    />
-                                ))}
-                            </div>
-                        </section>
-                    )}
-                </>
-            )
         }
 
-        // Root view — only show top-level folders (no parentId)
-        const rootFolders = folders.filter(f => !f.parentId)
-
-        if (rootFolders.length === 0) {
+        if (folders.length === 0) {
             return (
                 <div style={s.emptyState}>
                     <div style={{ fontSize: 16, fontWeight: 600 }}>No folders found</div>
@@ -671,7 +618,7 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
         return (
             <section style={s.section}>
                 <div style={s.folderGrid}>
-                    {rootFolders.map((folder) => (
+                    {folders.map((folder) => (
                         <FolderRow key={folder.resourceId} folder={folder} onOpen={handleFolderOpen} />
                     ))}
                 </div>
@@ -703,36 +650,26 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
                 {/* Scrollable body */}
                 <div style={s.scrollArea}>
                     {/* Breadcrumb */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 20, flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 20 }}>
                         {isInFolder && (
                             <button
                                 type="button"
                                 className={cx(iconBtnClass, css`width: 24px; height: 24px; border-radius: 4px; margin-left: -4px;`)}
                                 onClick={handleBack}
-                                aria-label="Back"
+                                aria-label="Back to folders"
                             >
                                 <BackIcon />
                             </button>
                         )}
                         {isInFolder ? (
                             <>
-                                <button type="button" className={crumbBtnClass} onClick={handleNavigateToRoot}>
+                                <button type="button" className={crumbBtnClass} onClick={handleBack}>
                                     All folders
                                 </button>
-                                {folderPath.map((folder, i) => (
-                                    <React.Fragment key={folder.resourceId}>
-                                        <span style={{ color: '#979A9B', display: 'flex', alignItems: 'center' }}>
-                                            <ChevronRightIcon />
-                                        </span>
-                                        {i < folderPath.length - 1 ? (
-                                            <button type="button" className={crumbBtnClass} onClick={() => handleNavigateTo(i)}>
-                                                {folder.name}
-                                            </button>
-                                        ) : (
-                                            <span style={s.crumbCurrent}>{folder.name}</span>
-                                        )}
-                                    </React.Fragment>
-                                ))}
+                                <span style={{ color: '#979A9B', display: 'flex', alignItems: 'center' }}>
+                                    <ChevronRightIcon />
+                                </span>
+                                <span style={s.crumbCurrent}>{currentFolder.name}</span>
                             </>
                         ) : (
                             <span style={s.crumbCurrent}>All folders</span>
