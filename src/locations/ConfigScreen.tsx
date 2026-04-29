@@ -310,11 +310,7 @@ const ConfigScreen = () => {
                             placeholder="Enter your Ceros REST API key"
                             onChange={(e) => setParameters((p) => ({ ...p, cerosApiKey: e.target.value }))}
                         />
-                        <FormControl.HelpText>
-                            Used to power the Experience Chooser. The key is stored securely and never exposed to the
-                            browser — it is only accessible inside the Contentful Function. Run{' '}
-                            <code>npm run create-app-action</code> once after deploying to register the function.
-                        </FormControl.HelpText>
+                        <FormControl.HelpText>Contact your Ceros account owner to get your REST API key.</FormControl.HelpText>
                     </FormControl>
                 </Form>
             </Box>

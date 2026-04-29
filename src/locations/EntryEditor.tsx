@@ -9,7 +9,6 @@ import {
     Note,
     Paragraph,
     Spinner,
-    Table,
     TextInput,
 } from '@contentful/f36-components'
 import { useSDK } from '@contentful/react-apps-toolkit'
@@ -29,6 +28,7 @@ interface FolderNode {
 interface ExperienceNode {
     resourceId: string
     name: string
+    thumbnailUrl?: string
 }
 
 interface SelectedExperience {
@@ -189,30 +189,20 @@ function ExperienceChooserModal({
                     <>
                         {folders.length === 0 && <Paragraph>No folders found.</Paragraph>}
                         {folders.length > 0 && (
-                            <Table>
-                                <Table.Head>
-                                    <Table.Row>
-                                        <Table.Cell>Folder</Table.Cell>
-                                        <Table.Cell></Table.Cell>
-                                    </Table.Row>
-                                </Table.Head>
-                                <Table.Body>
-                                    {folders.map((folder) => (
-                                        <Table.Row key={folder.resourceId}>
-                                            <Table.Cell>{folder.name}</Table.Cell>
-                                            <Table.Cell>
-                                                <Button
-                                                    variant="secondary"
-                                                    size="small"
-                                                    onClick={() => handleFolderClick(folder)}
-                                                >
-                                                    Browse
-                                                </Button>
-                                            </Table.Cell>
-                                        </Table.Row>
-                                    ))}
-                                </Table.Body>
-                            </Table>
+                            <div>
+                                {folders.map((folder) => (
+                                    <div
+                                        key={folder.resourceId}
+                                        className={styles.folderRow}
+                                        onClick={() => handleFolderClick(folder)}
+                                        role="button"
+                                        tabIndex={0}
+                                        onKeyDown={(e) => e.key === 'Enter' && handleFolderClick(folder)}
+                                    >
+                                        {folder.name}
+                                    </div>
+                                ))}
+                            </div>
                         )}
                     </>
                 )}
@@ -223,30 +213,29 @@ function ExperienceChooserModal({
                             <Paragraph>No published experiences in this folder.</Paragraph>
                         )}
                         {experiences.length > 0 && (
-                            <Table>
-                                <Table.Head>
-                                    <Table.Row>
-                                        <Table.Cell>Experience</Table.Cell>
-                                        <Table.Cell></Table.Cell>
-                                    </Table.Row>
-                                </Table.Head>
-                                <Table.Body>
-                                    {experiences.map((exp) => (
-                                        <Table.Row key={exp.resourceId}>
-                                            <Table.Cell>{exp.name}</Table.Cell>
-                                            <Table.Cell>
-                                                <Button
-                                                    variant="positive"
-                                                    size="small"
-                                                    onClick={() => handleExperienceClick(exp)}
-                                                >
-                                                    Select
-                                                </Button>
-                                            </Table.Cell>
-                                        </Table.Row>
-                                    ))}
-                                </Table.Body>
-                            </Table>
+                            <div className={styles.experienceGrid}>
+                                {experiences.map((exp) => (
+                                    <div
+                                        key={exp.resourceId}
+                                        className={styles.experienceCard}
+                                        onClick={() => handleExperienceClick(exp)}
+                                        role="button"
+                                        tabIndex={0}
+                                        onKeyDown={(e) => e.key === 'Enter' && handleExperienceClick(exp)}
+                                    >
+                                        {exp.thumbnailUrl ? (
+                                            <img
+                                                src={exp.thumbnailUrl}
+                                                alt={exp.name}
+                                                className={styles.experienceThumbnail}
+                                            />
+                                        ) : (
+                                            <div className={styles.experienceThumbnailPlaceholder} />
+                                        )}
+                                        <div className={styles.experienceCardLabel}>{exp.name}</div>
+                                    </div>
+                                ))}
+                            </div>
                         )}
                     </>
                 )}
