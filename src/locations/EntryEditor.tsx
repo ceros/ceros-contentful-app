@@ -60,13 +60,13 @@ function EmptyState({ entry, setLinked, parameters }: StateProps) {
                         value={experienceUrl}
                         type="text"
                         name="experienceUrl"
-                        placeholder="https://view.ceros.com/account/experience"
+                        placeholder="https://accoun.ceros.site/experience"
                         onChange={(e) => setExperienceUrl(e.target.value)}
                     />
                     {isCerosExperienceInvalid && (
                         <FormControl.ValidationMessage>
                             The experience URL is invalid. Make sure it looks like
-                            'https://view.ceros.com/account/experience' and that the experience is published.
+                            'https://account.ceros.site/experience' or 'https://view.ceros.com/account/experience' and that the experience is published.
                         </FormControl.ValidationMessage>
                     )}
                 </FormControl>
