@@ -1,7 +1,7 @@
 import { extract, setProviderList } from '@extractus/oembed-extractor'
+import type { OembedData } from '@extractus/oembed-extractor'
 
-export interface OembedMetadata {
-    type: string
+export interface OembedMetadata extends OembedData {
     url: string
     title: string
     html: string

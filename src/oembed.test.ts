@@ -98,7 +98,7 @@ describe('getExperienceMetadata', () => {
         })
 
         it('accepts valid *.ceros.site URLs', async () => {
-            mockExtract.mockResolvedValue({ ...baseMetadata, url: 'https://myaccount.ceros.site/experience' })
+            mockExtract.mockResolvedValue({ ...baseMetadata, url: 'https://myaccount.ceros.site/experience' } as OembedMetadata)
             const result = await getExperienceMetadata('https://myaccount.ceros.site/experience')
             expect(result).not.toBeNull()
         })
@@ -131,13 +131,13 @@ describe('getExperienceMetadata', () => {
         })
 
         it('preserves the full path for *.ceros.site URLs', async () => {
-            mockExtract.mockResolvedValue({ ...baseMetadata, url: 'https://myaccount.ceros.site/experience' })
+            mockExtract.mockResolvedValue({ ...baseMetadata, url: 'https://myaccount.ceros.site/experience' } as OembedMetadata)
             await getExperienceMetadata('https://myaccount.ceros.site/experience/page/2')
             expect(mockExtract).toHaveBeenCalledWith('https://myaccount.ceros.site/experience/page/2')
         })
 
         it('strips query strings from *.ceros.site URLs', async () => {
-            mockExtract.mockResolvedValue({ ...baseMetadata, url: 'https://myaccount.ceros.site/experience' })
+            mockExtract.mockResolvedValue({ ...baseMetadata, url: 'https://myaccount.ceros.site/experience' } as OembedMetadata)
             await getExperienceMetadata('https://myaccount.ceros.site/experience?mobile=true')
             expect(mockExtract).toHaveBeenCalledWith('https://myaccount.ceros.site/experience')
         })
@@ -162,7 +162,7 @@ describe('getExperienceMetadata', () => {
         })
 
         it('configures the account subdomain as oembed provider for *.ceros.site URLs', async () => {
-            mockExtract.mockResolvedValue({ ...baseMetadata, url: 'https://myaccount.ceros.site/experience' })
+            mockExtract.mockResolvedValue({ ...baseMetadata, url: 'https://myaccount.ceros.site/experience' } as OembedMetadata)
             await getExperienceMetadata('https://myaccount.ceros.site/experience')
             expect(mockSetProviderList).toHaveBeenCalledWith(
                 expect.arrayContaining([
@@ -210,7 +210,7 @@ describe('getExperienceMetadata', () => {
         })
 
         it('preserves the url from metadata when it is already set', async () => {
-            mockExtract.mockResolvedValue({ ...baseMetadata, url: 'https://view.ceros.com/account/experience' })
+            mockExtract.mockResolvedValue({ ...baseMetadata, url: 'https://view.ceros.com/account/experience' } as OembedMetadata)
             const result = await getExperienceMetadata('https://view.ceros.com/account/experience')
             expect(result?.url).toBe('https://view.ceros.com/account/experience')
         })
