@@ -60,7 +60,7 @@ function EmptyState({ entry, setLinked, parameters }: StateProps) {
                         value={experienceUrl}
                         type="text"
                         name="experienceUrl"
-                        placeholder="https://accoun.ceros.site/experience"
+                        placeholder="https://account.ceros.site/experience"
                         onChange={(e) => setExperienceUrl(e.target.value)}
                     />
                     {isCerosExperienceInvalid && (
