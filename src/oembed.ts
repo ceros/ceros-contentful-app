@@ -13,37 +13,38 @@ export interface OembedMetadata {
     embedType: 'full-height' | 'scrollable'
 }
 
-export async function getExperienceMetadata(experienceUrl: string): Promise<OembedMetadata | null> {
-    // Parse URL first so we can build the provider list dynamically
-    // Matches view.ceros.com/account/experience or account.ceros.site/experience
-    const regex = /(https:\/\/(?:view\.ceros\.com\/[a-zA-Z0-9-_]+\/[a-zA-Z0-9-_]+|[a-zA-Z0-9-_]+\.ceros\.site\/[a-zA-Z0-9-_]+))(?:.*)$/
-    let result = regex.exec(experienceUrl)
+export function parseCerosUrl(experienceUrl: string): URL | null {
+    try {
+        const url = new URL(experienceUrl)
+        const host = url.hostname
+        if (url.protocol === 'https:' && (host === 'view.ceros.com' || host.endsWith('.ceros.site'))) {
+            return url
+        }
+    } catch { /* invalid URL */ }
+    return null
+}
 
-    if (!result) {
+export async function getExperienceMetadata(experienceUrl: string): Promise<OembedMetadata | null> {
+    const url = parseCerosUrl(experienceUrl)
+
+    if (!url) {
         console.trace(`Experience URL '${experienceUrl}' isn't valid. Make sure it looks like
-        'https://view.ceros.com/account/experience' or 'https://<account>.ceros.site/experience'`)
+        'https://<account>.ceros.site/experience' or 'https://view.ceros.com/account/experience'`)
         return null
     }
 
-    const canonicalUrl = result[1]
-
-    // Build the provider list conditionally based on the URL type
-    const providers: Parameters<typeof setProviderList>[0] = []
-
-    const cerosSiteMatch = /^https:\/\/([a-zA-Z0-9-_]+)\.ceros\.site\//.exec(experienceUrl)
-    const host = cerosSiteMatch ? `${cerosSiteMatch[1]}.ceros.site` : 'view.ceros.com'
-
-    providers.push({
+    const canonicalUrl = url.origin + url.pathname
+    const providers: Parameters<typeof setProviderList>[0] = [{
         provider_name: 'Ceros',
         provider_url: 'https://www.ceros.com/',
         endpoints: [
             {
-                schemes: [`https://${host}/*`],
-                url: `https://${host}/oembed`,
+                schemes: [`${url.origin}/*`],
+                url: `${url.origin}/oembed`,
                 discovery: true,
             },
         ],
-    })
+    }]
 
     setProviderList(providers)
 

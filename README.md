@@ -1,8 +1,24 @@
-# ceros-contentful-app
+# Ceros Contentful App
 
-## Available Scripts
+The Ceros Contentful App lets you embed interactive Ceros experiences directly into the Contentful CMS — no manual copy-pasting of embed codes required. Just paste a published Ceros experience URL and the app automatically pulls the title, canonical URL, and embed code into your Contentful entry, building an organized library of interactive content ready for rapid deployment.
 
-In the project directory, you can run:
+## Features
+
+- **One-step linking** — Paste a published Ceros experience URL and the app fetches and stores all required metadata automatically.
+- **Live preview** — A rendered preview of the experience is displayed directly within the Contentful entry editor.
+- **Refresh on demand** — If an experience's canvas size or device variants change, refresh the embed code with one click without relinking.
+- **Flexible content model** — Map the app to any existing content type, or let the app create a default "Ceros Experience" content type for you.
+- **Supports all Ceros experiences** — Works with both `view.ceros.com` and `*.ceros.site` URLs.
+
+## How it works
+
+The app is built on the [Contentful App Framework](https://www.contentful.com/developers/docs/extensibility/app-framework/) and runs in two locations:
+
+**Config Screen** — Installed once per Contentful space. You select (or auto-create) a content type and map three fields to it: a title field (Symbol), a URL field (Symbol), and an embed code field (Text). The app can also register itself as the entry editor for that content type automatically.
+
+**Entry Editor** — Replaces the default editor for entries of the configured content type. When an entry has no linked experience, it shows a URL input form. On submission, the app calls the Ceros [oEmbed](https://oembed.com/) endpoint for that experience using [`@extractus/oembed-extractor`](https://github.com/extractus/oembed-extractor), then writes the returned title, canonical URL, and HTML embed snippet into the configured Contentful fields and saves the entry. Once linked, the editor shows a live preview (rendered by injecting the embed HTML into a container div) along with buttons to unlink or refresh the embed code.
+
+## Development
 
 #### `npm start`
 

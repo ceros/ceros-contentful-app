@@ -1,7 +1,7 @@
 import { ConfigAppSDK } from '@contentful/app-sdk'
 import { Box, Checkbox, Flex, Form, FormControl, Heading, Note, Paragraph, Select, TextInput } from '@contentful/f36-components'
 import { useSDK } from '@contentful/react-apps-toolkit'
-import { css } from 'emotion'
+import { css } from '@emotion/css'
 import { ContentTypeProps } from 'contentful-management'
 import React, { useCallback, useEffect, useState } from 'react'
 
