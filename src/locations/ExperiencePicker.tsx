@@ -14,12 +14,17 @@ export interface SelectedExperience {
 interface FolderNode {
     resourceId: string
     name: string
+    children: FolderNode[]
 }
 
 interface ExperienceNode {
     resourceId: string
     name: string
     thumbnailUrl?: string
+}
+
+function flattenFolders(items: FolderNode[]): FolderNode[] {
+    return items.flatMap(f => [f, ...flattenFolders(f.children)])
 }
 
 // ── Icons ────────────────────────────────────────────────────────────────────
@@ -416,7 +421,7 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
 
     const [appActionId, setAppActionId] = useState<string | null>(null)
     const [folders, setFolders] = useState<FolderNode[]>([])
-    const [currentFolder, setCurrentFolder] = useState<FolderNode | null>(null)
+    const [folderStack, setFolderStack] = useState<FolderNode[]>([])
     const [experienceCache, setExperienceCache] = useState<Record<string, FolderCacheEntry>>({})
     const [loading, setLoading] = useState(false)
     const [loadingExpId, setLoadingExpId] = useState<string | null>(null)
@@ -471,7 +476,7 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
     useEffect(() => {
         if (!isShown) {
             setFolders([])
-            setCurrentFolder(null)
+            setFolderStack([])
             setExperienceCache({})
             setError(null)
             setExpError(null)
@@ -499,7 +504,7 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
                 if (data.error) throw new Error(String(data.error))
                 const loadedFolders = (data.folders as FolderNode[]) ?? []
                 setFolders(loadedFolders)
-                prefetchWithConcurrency(loadedFolders, actionId) // background, non-blocking
+                prefetchWithConcurrency(flattenFolders(loadedFolders), actionId) // background, non-blocking
             } catch (err) {
                 console.error('[CerosApi] getFolderTree error:', err)
                 setError(err instanceof Error ? err.message : String(err))
@@ -518,9 +523,8 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
     }, [isShown, onClose])
 
     const handleFolderOpen = (folder: FolderNode) => {
-        setCurrentFolder(folder)
+        setFolderStack(prev => [...prev, folder])
         setExpError(null)
-        // Retry if not in cache or previously errored
         const entry = experienceCache[folder.resourceId]
         if (!entry || entry.status === 'error') {
             prefetchFolder(folder, appActionId!)
@@ -528,7 +532,12 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
     }
 
     const handleBack = () => {
-        setCurrentFolder(null)
+        setFolderStack(prev => prev.slice(0, -1))
+        setExpError(null)
+    }
+
+    const handleNavigateTo = (depth: number) => {
+        setFolderStack(prev => prev.slice(0, depth))
         setExpError(null)
     }
 
@@ -556,7 +565,8 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
 
     if (!isShown) return null
 
-    const isInFolder = currentFolder !== null
+    const currentFolder = folderStack[folderStack.length - 1] ?? null
+    const isInFolder = folderStack.length > 0
     const cacheEntry = currentFolder ? experienceCache[currentFolder.resourceId] : undefined
 
     const bodyContent = () => {
@@ -571,36 +581,53 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
         if (loading) return <FoldersSkeleton />
 
         if (isInFolder) {
-            if (!cacheEntry || cacheEntry.status === 'loading') return <ExperiencesSkeleton />
-            if (cacheEntry.status === 'error') {
-                return (
-                    <div style={{ padding: '4px 0' }}>
-                        <Note variant="negative">
-                            Failed to load experiences for this folder. Go back and try opening it again.
-                        </Note>
-                    </div>
-                )
-            }
-            if (cacheEntry.experiences.length === 0) return <EmptyFolderState />
+            const subFolders = currentFolder?.children ?? []
+            const hasExperiences = cacheEntry?.status === 'ready' && cacheEntry.experiences.length > 0
             return (
-                <section style={s.section}>
+                <>
                     {expError && (
                         <div style={{ marginBottom: 12 }}>
                             <Note variant="negative">{expError}</Note>
                         </div>
                     )}
-                    <div style={s.cardGrid}>
-                        {cacheEntry.experiences.map((exp) => (
-                            <ExperienceCard
-                                key={exp.resourceId}
-                                exp={exp}
-                                loading={loadingExpId === exp.resourceId}
-                                disabled={loadingExpId !== null}
-                                onSelect={handleExperienceClick}
-                            />
-                        ))}
-                    </div>
-                </section>
+                    {subFolders.length > 0 && (
+                        <section style={s.section}>
+                            {hasExperiences && <div style={s.eyebrow}>Folders</div>}
+                            <div style={s.folderGrid}>
+                                {subFolders.map((f) => (
+                                    <FolderRow key={f.resourceId} folder={f} onOpen={handleFolderOpen} />
+                                ))}
+                            </div>
+                        </section>
+                    )}
+                    {(!cacheEntry || cacheEntry.status === 'loading') && <ExperiencesSkeleton />}
+                    {cacheEntry?.status === 'error' && (
+                        <div style={{ padding: '4px 0' }}>
+                            <Note variant="negative">
+                                Failed to load experiences for this folder. Go back and try opening it again.
+                            </Note>
+                        </div>
+                    )}
+                    {cacheEntry?.status === 'ready' && cacheEntry.experiences.length > 0 && (
+                        <section style={s.section}>
+                            {subFolders.length > 0 && <div style={s.eyebrow}>Experiences</div>}
+                            <div style={s.cardGrid}>
+                                {cacheEntry.experiences.map((exp) => (
+                                    <ExperienceCard
+                                        key={exp.resourceId}
+                                        exp={exp}
+                                        loading={loadingExpId === exp.resourceId}
+                                        disabled={loadingExpId !== null}
+                                        onSelect={handleExperienceClick}
+                                    />
+                                ))}
+                            </div>
+                        </section>
+                    )}
+                    {cacheEntry?.status === 'ready' && cacheEntry.experiences.length === 0 && subFolders.length === 0 && (
+                        <EmptyFolderState />
+                    )}
+                </>
             )
         }
 
@@ -650,30 +677,38 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
                 {/* Scrollable body */}
                 <div style={s.scrollArea}>
                     {/* Breadcrumb */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 20 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 20, flexWrap: 'wrap' }}>
                         {isInFolder && (
                             <button
                                 type="button"
                                 className={cx(iconBtnClass, css`width: 24px; height: 24px; border-radius: 4px; margin-left: -4px;`)}
                                 onClick={handleBack}
-                                aria-label="Back to folders"
+                                aria-label="Back"
                             >
                                 <BackIcon />
                             </button>
                         )}
                         {isInFolder ? (
-                            <>
-                                <button type="button" className={crumbBtnClass} onClick={handleBack}>
-                                    All folders
-                                </button>
-                                <span style={{ color: '#979A9B', display: 'flex', alignItems: 'center' }}>
-                                    <ChevronRightIcon />
-                                </span>
-                                <span style={s.crumbCurrent}>{currentFolder.name}</span>
-                            </>
+                            <button type="button" className={crumbBtnClass} onClick={() => handleNavigateTo(0)}>
+                                All folders
+                            </button>
                         ) : (
                             <span style={s.crumbCurrent}>All folders</span>
                         )}
+                        {folderStack.map((folder, i) => (
+                            <React.Fragment key={folder.resourceId}>
+                                <span style={{ color: '#979A9B', display: 'flex', alignItems: 'center' }}>
+                                    <ChevronRightIcon />
+                                </span>
+                                {i < folderStack.length - 1 ? (
+                                    <button type="button" className={crumbBtnClass} onClick={() => handleNavigateTo(i + 1)}>
+                                        {folder.name}
+                                    </button>
+                                ) : (
+                                    <span style={s.crumbCurrent}>{folder.name}</span>
+                                )}
+                            </React.Fragment>
+                        ))}
                     </div>
                     {bodyContent()}
                 </div>

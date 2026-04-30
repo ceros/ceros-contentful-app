@@ -22,6 +22,7 @@ type FunctionContext = {
 export interface FolderNode {
   resourceId: string
   name: string
+  children: FolderNode[]
 }
 
 export interface ExperienceNode {
@@ -73,6 +74,7 @@ function normalizeFolderTree(data: any): FolderNode[] {
     .map((f: any) => ({
       resourceId: String(f.resourceId ?? f.id ?? ''),
       name: String(f.name ?? f.title ?? ''),
+      children: Array.isArray(f.children) ? normalizeFolderTree(f.children) : [],
     }))
     .filter((f: FolderNode) => f.resourceId && f.name !== 'Account Templates')
 }
