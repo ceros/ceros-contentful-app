@@ -3,23 +3,25 @@
   "version": "0.2.0",
   "private": true,
   "dependencies": {
-    "@contentful/app-sdk": "^4.17.2",
-    "@contentful/f36-components": "4.41.1",
-    "@contentful/f36-tokens": "4.0.1",
-    "@contentful/react-apps-toolkit": "1.2.15",
+    "@contentful/app-sdk": "^4.29.1",
+    "@contentful/f36-components": "4.81.1",
+    "@contentful/f36-tokens": "4.2.0",
+    "@contentful/react-apps-toolkit": "1.2.16",
     "@extractus/oembed-extractor": "^3.1.9",
-    "contentful-management": "10.35.6",
-    "@emotion/css": "11.11.0",
-    "react": "18.2.0",
-    "react-dom": "18.2.0",
-    "react-scripts": "5.0.1"
+    "contentful-management": "10.46.4",
+    "@emotion/css": "11.13.5",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
   },
   "scripts": {
-    "start": "cross-env BROWSER=none react-scripts start",
-    "build": "react-scripts build",
-    "test": "react-scripts test",
-    "eject": "react-scripts eject",
+    "start": "vite",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest",
+    "test:ci": "vitest run",
     "create-app-definition": "contentful-app-scripts create-app-definition",
+    "add-locations": "contentful-app-scripts add-locations",
     "upload": "contentful-app-scripts upload --bundle-dir ./build",
     "upload-ci": "contentful-app-scripts upload --ci --bundle-dir ./build --organization-id $CONTENTFUL_ORG_ID --definition-id $CONTENTFUL_APP_DEF_ID --token $CONTENTFUL_ACCESS_TOKEN"
   },
@@ -39,16 +41,18 @@
     ]
   },
   "devDependencies": {
-    "@contentful/app-scripts": "1.10.2",
-    "@testing-library/jest-dom": "5.16.5",
-    "@testing-library/react": "14.0.0",
-    "@tsconfig/create-react-app": "1.0.3",
-    "@types/jest": "29.5.2",
-    "@types/node": "20.2.5",
-    "@types/react": "18.2.7",
-    "@types/react-dom": "18.2.4",
+    "@contentful/app-scripts": "^2.3.0",
+    "@testing-library/jest-dom": "^5.17.0",
+    "@testing-library/react": "^14.3.1",
+    "@types/node": "^22.13.5",
+    "@types/react": "18.3.13",
+    "@types/react-dom": "18.3.1",
+    "@vitejs/plugin-react": "^4.0.3",
     "cross-env": "7.0.3",
-    "typescript": "5.0.4"
+    "jsdom": "^26.0.0",
+    "typescript": "6.0.3",
+    "vite": "^6.2.2",
+    "vitest": "^3.0.9"
   },
   "homepage": "."
 }

@@ -13,38 +13,48 @@ export interface OembedMetadata {
     embedType: 'full-height' | 'scrollable'
 }
 
+export function parseCerosUrl(experienceUrl: string): URL | null {
+    try {
+        const url = new URL(experienceUrl)
+        const host = url.hostname
+        if (url.protocol === 'https:' && (host === 'view.ceros.com' || host.endsWith('.ceros.site'))) {
+            return url
+        }
+    } catch { /* invalid URL */ }
+    return null
+}
+
 export async function getExperienceMetadata(experienceUrl: string): Promise<OembedMetadata | null> {
-    // Set up the oembed provider list
-    const providers = [
-        {
-            provider_name: 'Ceros',
-            provider_url: 'https://www.ceros.com/',
-            endpoints: [
-                {
-                    schemes: ['https://view.ceros.com/*'],
-                    url: 'https://view.ceros.com/oembed',
-                    discovery: true,
-                },
-            ],
-        },
-    ]
-    setProviderList(providers)
+    const url = parseCerosUrl(experienceUrl)
 
-    // Parse URL
-    // Regular expression to remove the /p/1 from the end of a URL like https://view.ceros.com/account/experience/p/1
-    const regex = /(https:\/\/view\.ceros\.com\/[a-zA-Z0-9-_]+\/[a-zA-Z0-9-_]+)(?:.*)$/
-    let result = regex.exec(experienceUrl)
-
-    if (!result) {
+    if (!url) {
         console.trace(`Experience URL '${experienceUrl}' isn't valid. Make sure it looks like
-        'https://view.ceros.com/account/experience'`)
+        'https://<account>.ceros.site/experience' or 'https://view.ceros.com/account/experience'`)
         return null
     }
 
+    const canonicalUrl = url.origin + url.pathname
+    const providers: Parameters<typeof setProviderList>[0] = [{
+        provider_name: 'Ceros',
+        provider_url: 'https://www.ceros.com/',
+        endpoints: [
+            {
+                schemes: [`${url.origin}/*`],
+                url: `${url.origin}/oembed`,
+                discovery: true,
+            },
+        ],
+    }]
+
+    setProviderList(providers)
+
     // Fetch the oembed data
     try {
-        const oembed = await extract(result[1])
-        return oembed as OembedMetadata
+        const metadata = await extract(canonicalUrl) as OembedMetadata
+        if (!metadata.url) {
+          metadata.url = canonicalUrl
+        }
+        return metadata
     } catch (err) {
         console.trace(err)
         return null

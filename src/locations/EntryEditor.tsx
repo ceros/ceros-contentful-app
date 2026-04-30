@@ -1,7 +1,7 @@
 import { EditorAppSDK, EntryAPI } from '@contentful/app-sdk'
 import { Box, Button, Flex, Form, FormControl, Note, Paragraph, TextInput } from '@contentful/f36-components'
 import { useSDK } from '@contentful/react-apps-toolkit'
-import React, { Dispatch, useEffect, useState } from 'react'
+import React, { Dispatch, useEffect, useRef, useState } from 'react'
 
 import cerosLogo from '../assets/ceros-logo.svg'
 import styles from '../styles'
@@ -60,13 +60,13 @@ function EmptyState({ entry, setLinked, parameters }: StateProps) {
                         value={experienceUrl}
                         type="text"
                         name="experienceUrl"
-                        placeholder="https://view.ceros.com/account/experience"
+                        placeholder="https://account.ceros.site/experience"
                         onChange={(e) => setExperienceUrl(e.target.value)}
                     />
                     {isCerosExperienceInvalid && (
                         <FormControl.ValidationMessage>
                             The experience URL is invalid. Make sure it looks like
-                            'https://view.ceros.com/account/experience' and that the experience is published.
+                            'https://account.ceros.site/experience' or 'https://view.ceros.com/account/experience' and that the experience is published.
                         </FormControl.ValidationMessage>
                     )}
                 </FormControl>
@@ -131,10 +131,21 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
         ;(async () => {
             // Determine if the embed code is for a Ceros experience
             setIsCerosExperience(
-                Boolean(embedCode.includes('class="ceros-experience"') && embedCode.includes('https://view.ceros.com/'))
+                Boolean(
+                  (embedCode.includes('class="ceros-experience"') && embedCode.includes('https://view.ceros.com/')) ||
+                  embedCode.includes('.ceros.site/')
+                )
             )
         })()
     }, [embedCode])
+
+    const embedRef = useRef<HTMLDivElement>(null)
+    useEffect(() => {
+        const container = embedRef.current
+        if (!container || !embedCode) return
+        container.innerHTML = ''
+        container.appendChild(document.createRange().createContextualFragment(embedCode))
+    }, [embedCode, isCerosExperience])
 
     return (
         <>
@@ -187,7 +198,7 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
                         </Box>
                     </Flex>
 
-                    <div className={styles.experienceEmbed} dangerouslySetInnerHTML={{ __html: embedCode }}></div>
+                    <div className={styles.experienceEmbed} ref={embedRef}></div>
                 </>
             ) : (
                 <>
