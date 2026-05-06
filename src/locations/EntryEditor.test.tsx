@@ -108,7 +108,7 @@ describe('Entry — EmptyState (no linked experience)', () => {
         render(<Entry />)
 
         await waitFor(() => {
-            expect(screen.getByPlaceholderText(/https:\/\/view\.ceros\.com\//i)).toBeInTheDocument()
+            expect(screen.getByPlaceholderText(/https:\/\/account\.ceros\.site\//i)).toBeInTheDocument()
         })
     })
 
@@ -125,7 +125,7 @@ describe('Entry — EmptyState (no linked experience)', () => {
 
         render(<Entry />)
 
-        const input = await screen.findByPlaceholderText(/https:\/\/view\.ceros\.com\//i)
+        const input = await screen.findByPlaceholderText(/https:\/\/account\.ceros\.site\//i)
         fireEvent.change(input, { target: { value: 'https://invalid.url' } })
         fireEvent.submit(input.closest('form')!)
 
@@ -139,7 +139,7 @@ describe('Entry — EmptyState (no linked experience)', () => {
 
         render(<Entry />)
 
-        const input = await screen.findByPlaceholderText(/https:\/\/view\.ceros\.com\//i)
+        const input = await screen.findByPlaceholderText(/https:\/\/account\.ceros\.site\//i)
         fireEvent.change(input, { target: { value: 'https://view.ceros.com/account/experience' } })
         fireEvent.submit(input.closest('form')!)
 
@@ -168,7 +168,7 @@ describe('Entry — EmptyState (no linked experience)', () => {
 
         render(<Entry />)
 
-        const input = await screen.findByPlaceholderText(/https:\/\/view\.ceros\.com\//i)
+        const input = await screen.findByPlaceholderText(/https:\/\/account\.ceros\.site\//i)
         fireEvent.change(input, { target: { value: 'https://view.ceros.com/account/experience' } })
         fireEvent.submit(input.closest('form')!)
 
@@ -200,7 +200,7 @@ describe('Entry — EmptyState (no linked experience)', () => {
 
         render(<Entry />)
 
-        const input = await screen.findByPlaceholderText(/https:\/\/view\.ceros\.com\//i)
+        const input = await screen.findByPlaceholderText(/https:\/\/account\.ceros\.site\//i)
         fireEvent.change(input, { target: { value: 'https://view.ceros.com/account/experience' } })
         fireEvent.submit(input.closest('form')!)
 
