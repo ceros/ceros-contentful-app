@@ -1,7 +1,7 @@
 import { extract, setProviderList } from '@extractus/oembed-extractor'
+import type { OembedData } from '@extractus/oembed-extractor'
 
-export interface OembedMetadata {
-    type: string
+export interface OembedMetadata extends OembedData {
     url: string
     title: string
     html: string
@@ -17,9 +17,21 @@ export function parseCerosUrl(experienceUrl: string): URL | null {
     try {
         const url = new URL(experienceUrl)
         const host = url.hostname
-        if (url.protocol === 'https:' && (host === 'view.ceros.com' || host.endsWith('.ceros.site'))) {
-            return url
+        if (url.protocol !== 'https:') {
+            return null
         }
+
+        const isViewCeros = host === 'view.ceros.com'
+        if(!isViewCeros && !host.endsWith('.ceros.site')) {
+            return null
+        }
+
+        const pathSegments = url?.pathname.split('/').filter(Boolean) ?? []
+        if(isViewCeros && pathSegments.length < 2) {
+            return null
+        }
+
+        return url
     } catch { /* invalid URL */ }
     return null
 }

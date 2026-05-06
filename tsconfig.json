@@ -7,11 +7,14 @@
     "allowSyntheticDefaultImports": true,
     "strict": true,
     "module": "ESNext",
-    "moduleResolution": "Node",
+    "moduleResolution": "Bundler",
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
-    "jsx": "react-jsx"
+    "jsx": "react-jsx",
+    "paths": {
+      "@extractus/oembed-extractor": ["./node_modules/@extractus/oembed-extractor/index"]
+    }
   },
   "include": ["src"],
   "exclude": ["actions", "functions"]
