@@ -1,5 +1,5 @@
 import { EditorAppSDK } from '@contentful/app-sdk'
-import { Note } from '@contentful/f36-components'
+import { Note, Pagination } from '@contentful/f36-components'
 import { useSDK } from '@contentful/react-apps-toolkit'
 import { css, cx, keyframes } from 'emotion'
 import React, { useEffect, useState } from 'react'
@@ -11,9 +11,19 @@ export interface SelectedExperience {
     embedCode: string
 }
 
+interface Paging {
+    total: number
+    page: number
+    pages: number
+    pageSize: number
+    next?: string
+    previous?: string
+}
+
 interface FolderNode {
     resourceId: string
     name: string
+    isFlexFolder: boolean
     children: FolderNode[]
 }
 
@@ -21,10 +31,17 @@ interface ExperienceNode {
     resourceId: string
     name: string
     thumbnailUrl?: string
+    isFlexExperience: boolean
 }
 
-function flattenFolders(items: FolderNode[]): FolderNode[] {
-    return items.flatMap(f => [f, ...flattenFolders(f.children)])
+// Depth-first search for a folder by id within a (possibly nested) tree.
+function findFolderNode(tree: FolderNode[], id: string): FolderNode | null {
+    for (const node of tree) {
+        if (node.resourceId === id) return node
+        const found = findFolderNode(node.children, id)
+        if (found) return found
+    }
+    return null
 }
 
 // ── Icons ────────────────────────────────────────────────────────────────────
@@ -381,6 +398,9 @@ function ExperienceCard({
                 )}
             </div>
             <div style={s.cardMeta}>
+                <span style={{ fontSize: 10, fontWeight: 600, color: '#636567', textTransform: 'uppercase' }}>
+                    {exp.isFlexExperience ? 'Flex' : 'Studio'}
+                </span>
                 <div style={s.cardTitle}>{exp.name}</div>
             </div>
         </button>
@@ -403,6 +423,15 @@ function EmptyFolderState() {
     )
 }
 
+// ── Sort options ──────────────────────────────────────────────────────────────
+
+const SORT_OPTIONS: { value: string; label: string }[] = [
+    { value: 'last_created', label: 'Created' },
+    { value: 'last_updated', label: 'Updated' },
+    { value: 'last_published', label: 'Published' },
+    { value: 'alphabetical_a_to_z', label: 'A-Z' },
+]
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export interface ExperiencePickerProps {
@@ -413,7 +442,7 @@ export interface ExperiencePickerProps {
 
 type FolderCacheEntry =
     | { status: 'loading' }
-    | { status: 'ready'; experiences: ExperienceNode[] }
+    | { status: 'ready'; experiences: ExperienceNode[]; paging: Paging | null; page: number }
     | { status: 'error' }
 
 export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePickerProps) {
@@ -423,10 +452,16 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
     const [folders, setFolders] = useState<FolderNode[]>([])
     const [folderStack, setFolderStack] = useState<FolderNode[]>([])
     const [experienceCache, setExperienceCache] = useState<Record<string, FolderCacheEntry>>({})
+    const [folderChildren, setFolderChildren] = useState<Record<string, FolderNode[]>>({})
     const [loading, setLoading] = useState(false)
     const [loadingExpId, setLoadingExpId] = useState<string | null>(null)
     const [error, setError] = useState<string | null>(null)
     const [expError, setExpError] = useState<string | null>(null)
+    const [searchTerm, setSearchTerm] = useState('')
+    const [debouncedSearch, setDebouncedSearch] = useState('')
+    const [sort, setSort] = useState('last_created')
+    // null = show all; 'flex' or 'studio' = only that type (client-side, loaded items only)
+    const [typeFilter, setTypeFilter] = useState<null | 'flex' | 'studio'>(null)
 
     const callFunction = async (actionId: string, params: Record<string, unknown>) => {
         const call = await sdk.cma.appActionCall.createWithResult(
@@ -442,34 +477,57 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
             const err = (call.sys as any).error
             throw new Error(`Function call failed: ${err?.message ?? JSON.stringify(err)}`)
         }
-        return (call.sys as any).result as Record<string, unknown>
+        return (call.sys as any).result as { data?: any; paging?: Paging | null; error?: string }
     }
 
-    const prefetchFolder = (folder: FolderNode, actionId: string): Promise<void> => {
-        setExperienceCache(prev => ({ ...prev, [folder.resourceId]: { status: 'loading' } }))
-        return callFunction(actionId, { action: 'getFolderExperiences', folderId: folder.resourceId })
-            .then(data => {
-                if (data.error) throw new Error(String(data.error))
-                setExperienceCache(prev => ({
+    // Single source of truth for the current folder's list query (sort +
+    // search). Both the fetch effect and pagination read it, so they stay
+    // in sync with the active Sort/Search controls.
+    const buildExperienceQuery = (): Record<string, unknown> => ({
+        sort,
+        ...(searchTerm ? { search: searchTerm } : {}),
+    })
+
+    const fetchFolderPage = (folder: FolderNode, actionId: string, page = 1, extraQuery: Record<string, unknown> = {}) => {
+        setExperienceCache((prev) => ({ ...prev, [folder.resourceId]: { status: 'loading' } }))
+        return callFunction(actionId, {
+            action: 'getFolderExperiences',
+            folderId: folder.resourceId,
+            query: JSON.stringify({ page, ...extraQuery }),
+        })
+            .then((res) => {
+                if (res.error) throw new Error(String(res.error))
+                setExperienceCache((prev) => ({
                     ...prev,
-                    [folder.resourceId]: { status: 'ready', experiences: (data.experiences as ExperienceNode[]) ?? [] },
+                    [folder.resourceId]: {
+                        status: 'ready',
+                        experiences: (res.data as ExperienceNode[]) ?? [],
+                        paging: res.paging ?? null,
+                        page,
+                    },
                 }))
             })
             .catch(() => {
-                setExperienceCache(prev => ({ ...prev, [folder.resourceId]: { status: 'error' } }))
+                setExperienceCache((prev) => ({ ...prev, [folder.resourceId]: { status: 'error' } }))
             })
     }
 
-    // Drains a shared queue with `limit` concurrent workers (fire-and-forget)
-    const prefetchWithConcurrency = (foldersToFetch: FolderNode[], actionId: string, limit = 3) => {
-        const queue = [...foldersToFetch]
-        const worker = async () => {
-            while (queue.length > 0) {
-                const folder = queue.shift()!
-                await prefetchFolder(folder, actionId)
-            }
+    // Lazy-load a folder's children on open. `depth` is provided by the caller
+    // (computed from the folder's position in the stack). The response may
+    // include other folders, so we locate this folder within it and take its
+    // children.
+    const loadSubFolders = async (folder: FolderNode, actionId: string, depth: number) => {
+        if (folder.children.length > 0 || folderChildren[folder.resourceId]) return
+        const res = await callFunction(actionId, {
+            action: 'getFolderTree',
+            query: JSON.stringify({ folder: folder.resourceId, depth }),
+        })
+        if (!res.error) {
+            const raw = (res.data as FolderNode[]) ?? []
+            const node = findFolderNode(raw, folder.resourceId)
+            const kids = node ? node.children : raw
+            setFolderChildren((prev) => ({ ...prev, [folder.resourceId]: kids }))
         }
-        Array.from({ length: Math.min(limit, foldersToFetch.length) }, worker)
     }
 
     // Reset + load folders when modal opens
@@ -478,6 +536,7 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
             setFolders([])
             setFolderStack([])
             setExperienceCache({})
+            setFolderChildren({})
             setError(null)
             setExpError(null)
             setLoadingExpId(null)
@@ -500,11 +559,13 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
                 }
                 const actionId = cerosAction.sys.id
                 setAppActionId(actionId)
-                const data = await callFunction(actionId, { action: 'getFolderTree' })
-                if (data.error) throw new Error(String(data.error))
-                const loadedFolders = (data.folders as FolderNode[]) ?? []
+                const treeResult = await callFunction(actionId, {
+                    action: 'getFolderTree',
+                    query: JSON.stringify({ depth: 2 }),
+                })
+                if (treeResult.error) throw new Error(String(treeResult.error))
+                const loadedFolders = (treeResult.data as FolderNode[]) ?? []
                 setFolders(loadedFolders)
-                prefetchWithConcurrency(flattenFolders(loadedFolders), actionId) // background, non-blocking
             } catch (err) {
                 console.error('[CerosApi] getFolderTree error:', err)
                 setError(err instanceof Error ? err.message : String(err))
@@ -522,23 +583,50 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
         return () => window.removeEventListener('keydown', onKey)
     }, [isShown, onClose])
 
+    // Debounced mirror of the search input, used below so typing doesn't
+    // trigger a fetch on every keystroke.
+    useEffect(() => {
+        const t = setTimeout(() => setDebouncedSearch(searchTerm), 300)
+        return () => clearTimeout(t)
+    }, [searchTerm])
+
+    // Single source of truth for loading the current folder's experiences:
+    // fetches page 1 whenever the active folder, sort, debounced search
+    // term, or appActionId changes. This guarantees the visible page-1 data
+    // always matches the active folder + Sort + Search controls.
+    useEffect(() => {
+        const folder = folderStack[folderStack.length - 1]
+        if (!folder || !appActionId) return
+        fetchFolderPage(folder, appActionId, 1, buildExperienceQuery())
+    }, [folderStack, sort, debouncedSearch, appActionId]) // eslint-disable-line react-hooks/exhaustive-deps
+
     const handleFolderOpen = (folder: FolderNode) => {
+        // Request enough depth to include this folder's children: the folder
+        // being opened is one level below the current stack, and its children are
+        // one level beyond that → folderStack.length + 2.
+        const childDepth = folderStack.length + 2
         setFolderStack(prev => [...prev, folder])
         setExpError(null)
-        const entry = experienceCache[folder.resourceId]
-        if (!entry || entry.status === 'error') {
-            prefetchFolder(folder, appActionId!)
-        }
+        setSearchTerm('')
+        setDebouncedSearch('')
+        setTypeFilter(null)
+        loadSubFolders(folder, appActionId!, childDepth)
     }
 
     const handleBack = () => {
         setFolderStack(prev => prev.slice(0, -1))
         setExpError(null)
+        setSearchTerm('')
+        setDebouncedSearch('')
+        setTypeFilter(null)
     }
 
     const handleNavigateTo = (depth: number) => {
         setFolderStack(prev => prev.slice(0, depth))
         setExpError(null)
+        setSearchTerm('')
+        setDebouncedSearch('')
+        setTypeFilter(null)
     }
 
     const handleExperienceClick = async (exp: ExperienceNode) => {
@@ -546,15 +634,16 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
         setLoadingExpId(exp.resourceId)
         setExpError(null)
         try {
-            const data = await callFunction(appActionId, {
+            const res = await callFunction(appActionId, {
                 action: 'getEmbedCode',
                 resourceId: exp.resourceId,
             })
-            if (data.error) throw new Error(String(data.error))
+            if (res.error) throw new Error(String(res.error))
+            const d = (res.data as { fullHeightEmbedCode?: string; scrollableEmbedCode?: string; inlineEmbedCode?: string; url?: string }) ?? {}
             onSelect({
                 name: exp.name,
-                url: String(data.url ?? ''),
-                embedCode: String(data.embedCode ?? ''),
+                url: String(d.url ?? ''),
+                embedCode: String(d.fullHeightEmbedCode || d.scrollableEmbedCode || d.inlineEmbedCode || ''),
             })
         } catch (err) {
             console.error('[CerosApi] getEmbedCode error:', err)
@@ -563,11 +652,18 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
         }
     }
 
+    const childrenOf = (folder: FolderNode): FolderNode[] =>
+        folder.children.length > 0 ? folder.children : folderChildren[folder.resourceId] ?? []
+
     if (!isShown) return null
 
     const currentFolder = folderStack[folderStack.length - 1] ?? null
     const isInFolder = folderStack.length > 0
     const cacheEntry = currentFolder ? experienceCache[currentFolder.resourceId] : undefined
+
+    const visibleExperiences = (cacheEntry?.status === 'ready' ? cacheEntry.experiences : []).filter(
+        (e) => typeFilter === null || (typeFilter === 'flex' ? e.isFlexExperience : !e.isFlexExperience)
+    )
 
     const bodyContent = () => {
         if (error) {
@@ -581,7 +677,7 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
         if (loading) return <FoldersSkeleton />
 
         if (isInFolder) {
-            const subFolders = currentFolder?.children ?? []
+            const subFolders = currentFolder ? childrenOf(currentFolder) : []
             const hasExperiences = cacheEntry?.status === 'ready' && cacheEntry.experiences.length > 0
             return (
                 <>
@@ -610,19 +706,47 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
                     )}
                     {cacheEntry?.status === 'ready' && cacheEntry.experiences.length > 0 && (
                         <section style={s.section}>
-                            {subFolders.length > 0 && <div style={s.eyebrow}>Experiences</div>}
-                            <div style={s.cardGrid}>
-                                {cacheEntry.experiences.map((exp) => (
-                                    <ExperienceCard
-                                        key={exp.resourceId}
-                                        exp={exp}
-                                        loading={loadingExpId === exp.resourceId}
-                                        disabled={loadingExpId !== null}
-                                        onSelect={handleExperienceClick}
-                                    />
-                                ))}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                                <div style={s.eyebrow}>Experiences</div>
+                                <select value={typeFilter ?? ''} onChange={(e) => setTypeFilter((e.target.value || null) as any)}
+                                        style={{ marginLeft: 'auto', font: 'inherit', fontSize: 14, padding: '4px 8px' }}>
+                                    <option value="">All experiences</option>
+                                    <option value="studio">Created with Studio</option>
+                                    <option value="flex">Created with Flex</option>
+                                </select>
+                                <select value={sort} onChange={(e) => setSort(e.target.value)}
+                                        style={{ font: 'inherit', fontSize: 14, padding: '4px 8px' }}>
+                                    {SORT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                                </select>
                             </div>
+                            {visibleExperiences.length > 0 ? (
+                                <div style={s.cardGrid}>
+                                    {visibleExperiences.map((exp) => (
+                                        <ExperienceCard
+                                            key={exp.resourceId}
+                                            exp={exp}
+                                            loading={loadingExpId === exp.resourceId}
+                                            disabled={loadingExpId !== null}
+                                            onSelect={handleExperienceClick}
+                                        />
+                                    ))}
+                                </div>
+                            ) : (
+                                <Note variant="neutral">
+                                    No {typeFilter === 'flex' ? 'Flex' : 'Studio'} experiences on this page. Try another page or clear the filter.
+                                </Note>
+                            )}
                         </section>
+                    )}
+                    {cacheEntry?.status === 'ready' && cacheEntry.paging && cacheEntry.paging.pages > 1 && currentFolder && (
+                        <Pagination
+                            activePage={cacheEntry.page - 1}
+                            itemsPerPage={cacheEntry.paging.pageSize}
+                            totalItems={cacheEntry.paging.total}
+                            isLastPage={!cacheEntry.paging.next}
+                            pageLength={cacheEntry.experiences.length}
+                            onPageChange={(p) => appActionId && fetchFolderPage(currentFolder, appActionId, p + 1, buildExperienceQuery())}
+                        />
                     )}
                     {cacheEntry?.status === 'ready' && cacheEntry.experiences.length === 0 && subFolders.length === 0 && (
                         <EmptyFolderState />
@@ -709,6 +833,15 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
                                 )}
                             </React.Fragment>
                         ))}
+                        {isInFolder && (
+                            <input
+                                type="text"
+                                value={searchTerm}
+                                placeholder={`Search in ${currentFolder?.name ?? 'folder'}`}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                                style={{ marginLeft: 'auto', padding: '6px 10px', border: '1px solid #DCDFE1', borderRadius: 6, font: 'inherit', fontSize: 14 }}
+                            />
+                        )}
                     </div>
                     {bodyContent()}
                 </div>
