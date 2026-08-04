@@ -25,11 +25,97 @@ interface StateProps {
     parameters: AppInstallationParameters
 }
 
+export type EmbedKind = 'none' | 'iframe' | 'inline'
+
+// Classify a stored embed code so the editor can render it correctly.
+// - iframe: full-height / scrollable variants (self-contained iframe markup, no script)
+// - inline: Flex inline variant (needs its flex-client script to execute)
+// - none:   not a recognizable Ceros embed
+export function classifyEmbed(embedCode: string): EmbedKind {
+    if (!embedCode) return 'none'
+    // Inline is the only variant that ships an executable script tag. The
+    // data-flex-* container attribute and a flex-client script are the public
+    // inline embed signals.
+    const isInline =
+        /data-flex-[a-z-]+/i.test(embedCode) ||
+        /<script[^>]+src=["'][^"']*flex-client[^"']*["']/i.test(embedCode)
+    if (isInline) return 'inline'
+    const isIframe =
+        (embedCode.includes('class="ceros-experience"') && embedCode.includes('https://view.ceros.com/')) ||
+        embedCode.includes('.ceros.site/')
+    if (isIframe) return 'iframe'
+    return 'none'
+}
+
+const INLINE_PREVIEW_DEFAULT_HEIGHT = 600
+
+// Renders an inline Flex embed inside a srcDoc iframe so its flex-client
+// script executes in an isolated document (it never touches the Contentful
+// app's DOM/globals; teardown is just discarding the iframe). The srcDoc
+// document is same-origin, so we measure its content to auto-size the preview
+// and to detect whether the experience actually rendered.
+function InlineEmbedPreview({ embedCode }: { embedCode: string }) {
+    const [height, setHeight] = useState(INLINE_PREVIEW_DEFAULT_HEIGHT)
+    const [failed, setFailed] = useState(false)
+    const iframeRef = useRef<HTMLIFrameElement>(null)
+
+    useEffect(() => {
+        setFailed(false)
+        let settled = false
+        const measure = (): number => {
+            const doc = iframeRef.current?.contentDocument
+            if (!doc || !doc.body) return 0
+            return Math.max(doc.body.scrollHeight, doc.documentElement.scrollHeight)
+        }
+        // flex-client renders asynchronously after load, so poll for content
+        // growth over a short window rather than measuring a single time.
+        const interval = setInterval(() => {
+            const h = measure()
+            if (h > 40) {
+                setHeight(h)
+                settled = true
+            }
+        }, 500)
+        const timeout = setTimeout(() => {
+            clearInterval(interval)
+            if (!settled) setFailed(true)
+        }, 6000)
+        return () => {
+            clearInterval(interval)
+            clearTimeout(timeout)
+        }
+    }, [embedCode])
+
+    return (
+        <>
+            <iframe
+                ref={iframeRef}
+                title="Ceros inline experience preview"
+                srcDoc={embedCode}
+                style={{ width: '100%', height, border: 'none' }}
+            />
+            <Paragraph>
+                <small style={{ color: tokens.gray600 }}>
+                    This is an editor preview — the inline experience will size itself correctly on your published site.
+                </small>
+            </Paragraph>
+            {failed && (
+                <Box marginTop="spacingS">
+                    <Note variant="warning">
+                        The inline preview couldn't be shown here, but the experience will still render on your published site.
+                    </Note>
+                </Box>
+            )}
+        </>
+    )
+}
+
 function EmptyState({ entry, setLinked, parameters }: StateProps) {
     const [experienceUrl, setExperienceUrl] = useState('')
     const [loading, setLoading] = useState(false)
     const [isCerosExperienceInvalid, setIsCerosExperienceInvalid] = useState(false)
     const [isChooserOpen, setIsChooserOpen] = useState(false)
+    const [saveError, setSaveError] = useState(false)
 
     const linkByUrl = async (url: string) => {
         setLoading(true)
@@ -42,10 +128,17 @@ function EmptyState({ entry, setLinked, parameters }: StateProps) {
             entry.fields[parameters.urlFieldId].setValue(experienceMetadata['url'])
             entry.fields[parameters.embedCodeFieldId].setValue(experienceMetadata['html'])
 
-            entry.save().then(() => {
-                setLoading(false)
-                setLinked(true)
-            })
+            setSaveError(false)
+            entry.save()
+                .then(() => {
+                    setLoading(false)
+                    setLinked(true)
+                })
+                .catch((err) => {
+                    console.error('Failed to save entry after linking by URL:', err)
+                    setSaveError(true)
+                    setLoading(false)
+                })
         } else {
             console.error(`Couldn't get experience metadata for url: '${url}'`)
             setIsCerosExperienceInvalid(true)
@@ -61,10 +154,17 @@ function EmptyState({ entry, setLinked, parameters }: StateProps) {
         entry.fields[parameters.urlFieldId].setValue(url)
         entry.fields[parameters.embedCodeFieldId].setValue(embedCode)
 
-        entry.save().then(() => {
-            setLoading(false)
-            setLinked(true)
-        })
+        setSaveError(false)
+        entry.save()
+            .then(() => {
+                setLoading(false)
+                setLinked(true)
+            })
+            .catch((err) => {
+                console.error('Failed to save entry after selecting experience:', err)
+                setSaveError(true)
+                setLoading(false)
+            })
     }
 
     return (
@@ -74,6 +174,14 @@ function EmptyState({ entry, setLinked, parameters }: StateProps) {
                 onClose={() => setIsChooserOpen(false)}
                 onSelect={handleSelectExperience}
             />
+
+            {saveError && (
+                <Box marginBottom="spacingM">
+                    <Note variant="negative">
+                        Couldn't save this entry. Please try again. If the problem persists, refresh Contentful and retry.
+                    </Note>
+                </Box>
+            )}
 
             <img src={cerosLogo} alt="Ceros Logo" className={styles.logo} width="150px" />
 
@@ -167,26 +275,18 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
 
     // State for the embed code
     const [embedCode, setEmbedCode] = useState(entry.fields[parameters.embedCodeFieldId].getValue())
-    const [isCerosExperience, setIsCerosExperience] = useState(false)
+    const [embedKind, setEmbedKind] = useState<EmbedKind>('none')
     useEffect(() => {
-        ;(async () => {
-            // Determine if the embed code is for a Ceros experience
-            setIsCerosExperience(
-                Boolean(
-                  (embedCode.includes('class="ceros-experience"') && embedCode.includes('https://view.ceros.com/')) ||
-                  embedCode.includes('.ceros.site/')
-                )
-            )
-        })()
+        setEmbedKind(classifyEmbed(embedCode))
     }, [embedCode])
 
     const embedRef = useRef<HTMLDivElement>(null)
     useEffect(() => {
         const container = embedRef.current
-        if (!container || !embedCode) return
+        if (!container || !embedCode || embedKind !== 'iframe') return
         container.innerHTML = ''
         container.appendChild(document.createRange().createContextualFragment(embedCode))
-    }, [embedCode, isCerosExperience])
+    }, [embedCode, embedKind])
 
     return (
         <>
@@ -201,7 +301,7 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
 
             <img src={cerosLogo} alt="Ceros Logo" className={styles.logo} width="150px" />
 
-            {isCerosExperience ? (
+            {embedKind !== 'none' ? (
                 <>
                     <Paragraph>
                         A Ceros experience is linked to this entry. You can see a preview of it below.
@@ -239,7 +339,9 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
                         </Box>
                     </Flex>
 
-                    <div className={styles.experienceEmbed} ref={embedRef}></div>
+                    {embedKind === 'inline'
+                        ? <InlineEmbedPreview embedCode={embedCode} />
+                        : <div className={styles.experienceEmbed} ref={embedRef}></div>}
                 </>
             ) : (
                 <>

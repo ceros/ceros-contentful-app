@@ -91,6 +91,12 @@ async function cerosGet(
 ): Promise<any> {
   const response = await fetch(`${BASE_URL}${path}`, { headers: makeHeaders(apiKey) })
   if (!response.ok) {
+    if (response.status === 401) {
+      return { _error: 'Ceros API key is invalid. Check it in the app configuration.' }
+    }
+    if (response.status === 403) {
+      return { _error: 'There is a problem with your Ceros API key. Check it in the app configuration.' }
+    }
     const text = await response.text()
     return { _error: `Ceros API error (${response.status}): ${text}` }
   }
@@ -109,7 +115,6 @@ function normalizeArray(data: any): any[] {
 }
 
 function normalizeFolderTree(data: any): FolderNode[] {
-  console.log('Normalize folder tree')
   return normalizeArray(data)
     .map((f: any) => ({
       resourceId: String(f.resourceId ?? f.id ?? ''),
@@ -121,7 +126,6 @@ function normalizeFolderTree(data: any): FolderNode[] {
 }
 
 function normalizeExperiences(data: any): ExperienceNode[] {
-  console.log('Normalize experiences')
   const items = normalizeArray(data)
   return items
     .filter(
@@ -172,10 +176,8 @@ export const handler = async (
   event: AppActionEvent,
   context: FunctionContext
 ): Promise<Record<string, unknown>> => {
-  console.log('Handler start')
   try {
     const result = await run(event, context)
-    console.log('Hander end')
     return result
   } catch (err: any) {
     return { error: `Unexpected function error: ${err?.message ?? String(err)}` }
@@ -186,7 +188,6 @@ async function run(
   event: AppActionEvent,
   context: FunctionContext
 ): Promise<Record<string, unknown>> {
-  console.log('Run start')
   const apiKey = context.appInstallationParameters?.cerosApiKey
   if (!apiKey) {
     return { error: 'Ceros API key is not configured. Please set it in the app configuration.' }
@@ -201,7 +202,6 @@ async function run(
 
   switch (action) {
     case 'getFolderTree': {
-      console.log('Get Folder Tree start')
       const accountResp = await cerosGet('/accounts/current-account', apiKey)
       if (accountResp._error) return { error: accountResp._error }
 
@@ -216,12 +216,10 @@ async function run(
       )
       if (treeResp._error) return { error: treeResp._error }
 
-      console.log('Get Folder Tree end')
       return { data: normalizeFolderTree(treeResp), paging: null }
     }
 
     case 'getFolderExperiences': {
-      console.log('Get Folder Experiences start')
       if (!folderId) return { error: 'folderId is required' }
 
       const qs = parseQuery('getFolderExperiences', query)
@@ -231,7 +229,6 @@ async function run(
       )
       if (resp._error) return { error: resp._error }
 
-      console.log('Get Folder Experiences end')
       return { data: normalizeExperiences(resp), paging: extractPaging(resp) }
     }
 
