@@ -74,7 +74,7 @@ function parseQuery(action: string, rawQuery: unknown): URLSearchParams {
 // ── API helpers ──────────────────────────────────────────────────────────────
 
 const BASE_URL = 'https://rest.ceros.com'
-const API_VERSION = '2026-02-25-12-00'
+const API_VERSION = '2026-05-28-09-00'
 
 function makeHeaders(apiKey: string): Record<string, string> {
   return {
