@@ -18,33 +18,15 @@ import { getExperienceMetadata } from '../oembed'
 import { AppInstallationParameters } from './ConfigScreen'
 import tokens from '@contentful/f36-tokens'
 import { ExperiencePicker, SelectedExperience } from './ExperiencePicker'
+import { classifyEmbed, EmbedKind } from '../embed-classify'
+
+export { classifyEmbed } from '../embed-classify'
+export type { EmbedKind } from '../embed-classify'
 
 interface StateProps {
     entry: EntryAPI
     setLinked: Dispatch<any>
     parameters: AppInstallationParameters
-}
-
-export type EmbedKind = 'none' | 'iframe' | 'inline'
-
-// Classify a stored embed code so the editor can render it correctly.
-// - iframe: full-height / scrollable variants (self-contained iframe markup, no script)
-// - inline: Flex inline variant (needs its flex-client script to execute)
-// - none:   not a recognizable Ceros embed
-export function classifyEmbed(embedCode: string): EmbedKind {
-    if (!embedCode) return 'none'
-    // Inline is the only variant that ships an executable script tag. The
-    // data-flex-* container attribute and a flex-client script are the public
-    // inline embed signals.
-    const isInline =
-        /data-flex-[a-z-]+/i.test(embedCode) ||
-        /<script[^>]+src=["'][^"']*flex-client[^"']*["']/i.test(embedCode)
-    if (isInline) return 'inline'
-    const isIframe =
-        (embedCode.includes('class="ceros-experience"') && embedCode.includes('https://view.ceros.com/')) ||
-        embedCode.includes('.ceros.site/')
-    if (isIframe) return 'iframe'
-    return 'none'
 }
 
 const INLINE_PREVIEW_DEFAULT_HEIGHT = 600
