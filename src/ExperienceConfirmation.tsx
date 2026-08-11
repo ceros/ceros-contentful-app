@@ -26,7 +26,10 @@ export interface ExperienceConfirmationProps {
     isBusy?: boolean
 }
 
-const VARIANT_ORDER: EmbedVariant[] = ['fullHeight', 'scrollable', 'inline']
+// Exported so callers outside this component (EntryEditor's currentVariant
+// fallback) can pick a variant that actually exists in a model using the same
+// preference order, instead of guessing a fixed variant that might be absent.
+export const VARIANT_ORDER: EmbedVariant[] = ['fullHeight', 'scrollable', 'inline']
 
 const VARIANT_LABELS: Record<EmbedVariant, string> = {
     fullHeight: 'Full height',

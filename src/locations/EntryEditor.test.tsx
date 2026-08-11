@@ -17,11 +17,9 @@ vi.mock('../ceros-action', () => ({
 }))
 
 import { useSDK } from '@contentful/react-apps-toolkit'
-import { getExperienceMetadata } from '../oembed'
 import { callCerosAction, findCerosActionId } from '../ceros-action'
 import Entry from './EntryEditor'
 
-const mockGetExperienceMetadata = vi.mocked(getExperienceMetadata)
 const mockUseSDK = vi.mocked(useSDK)
 const mockFindCerosActionId = vi.mocked(findCerosActionId)
 const mockCallCerosAction = vi.mocked(callCerosAction)
@@ -128,9 +126,7 @@ describe('Entry — EmptyState (no linked experience)', () => {
         })
     })
 
-    it('shows a validation error when getExperienceMetadata returns null', async () => {
-        mockGetExperienceMetadata.mockResolvedValue(null)
-
+    it('shows a validation error when the pasted URL is not a recognized Ceros host', async () => {
         render(<Entry />)
 
         const input = await screen.findByPlaceholderText(/https:\/\/account\.ceros\.site\//i)
@@ -260,6 +256,30 @@ describe('Entry — EmptyState paste flow', () => {
 
         await waitFor(() => expect(screen.getByText('Second Brass Storm')).toBeInTheDocument())
         expect(screen.queryByText(/couldn't save this entry/i)).not.toBeInTheDocument()
+    })
+
+    it('restores all three fields and stays unlinked when a paste save fails', async () => {
+        mockCallCerosAction.mockResolvedValue({ data: FLEX_MODEL })
+        sdk.entry.save.mockRejectedValueOnce(new Error('save failed'))
+
+        await pasteAndSubmit('https://ceros-qa.ceros.site/fifth-brass-storm')
+        await waitFor(() => expect(screen.getByText('Fifth Brass Storm')).toBeInTheDocument())
+
+        fireEvent.click(screen.getByRole('button', { name: /^insert$/i }))
+
+        await waitFor(() => expect(screen.getByText(/couldn't save this entry/i)).toBeInTheDocument())
+
+        // All three fields were written with the chosen experience, then rolled
+        // back to their prior (empty) values once the save rejected.
+        expect(sdk.entry.fields.title.setValue).toHaveBeenCalledWith('Fifth Brass Storm')
+        expect(sdk.entry.fields.title.setValue).toHaveBeenLastCalledWith('')
+        expect(sdk.entry.fields.url.setValue).toHaveBeenCalledWith('https://ceros-qa.ceros.site/fifth-brass-storm')
+        expect(sdk.entry.fields.url.setValue).toHaveBeenLastCalledWith('')
+        expect(sdk.entry.fields.embedCode.setValue).toHaveBeenCalledWith(FLEX_MODEL.embedCodes.fullHeight)
+        expect(sdk.entry.fields.embedCode.setValue).toHaveBeenLastCalledWith('')
+
+        // Never flipped to the linked view for a write that was never persisted.
+        expect(screen.getByText('Fifth Brass Storm')).toBeInTheDocument()
     })
 
     it('rejects a non-Ceros host before calling the function', async () => {
@@ -445,7 +465,83 @@ describe('Entry — LinkedState refresh and embed style', () => {
         expect(screen.getByLabelText(/full height/i)).not.toBeChecked()
     })
 
-    it('rolls back the in-memory draft when a refresh save fails, leaving the original code as the last write', async () => {
+    it('preserves an exact-match Scrollable entry on refresh, never full-height', async () => {
+        // Restores coverage the scrollable-only-Studio test below doesn't
+        // provide: here the model offers BOTH fullHeight and scrollable, and
+        // the stored code is byte-identical to the scrollable snippet, so this
+        // exercises currentVariant's exact-match branch specifically — the
+        // exact-match result must still win over any fallback preference.
+        const SCROLLABLE_SNIPPET =
+            '<iframe src="https://ceros-qa.ceros.site/fifth-brass-storm?scrollable=true"></iframe>'
+        mockCallCerosAction.mockResolvedValue({
+            data: { ...RESOLVED, embedCodes: { ...RESOLVED.embedCodes, scrollable: SCROLLABLE_SNIPPET } },
+        })
+        await renderLinked(SCROLLABLE_SNIPPET)
+
+        fireEvent.click(screen.getByRole('button', { name: /refresh embed code/i }))
+
+        await waitFor(() =>
+            expect(sdk.entry.fields.embedCode.setValue).toHaveBeenCalledWith(SCROLLABLE_SNIPPET)
+        )
+        expect(sdk.entry.fields.embedCode.setValue).not.toHaveBeenCalledWith(IFRAME_SNIPPET)
+    })
+
+    it('refreshes a scrollable-only Studio entry with the updated snippet, with no fullHeight variant to fall back on', async () => {
+        // Realistic Studio-scrollable shape: resolveViaOembed returns exactly
+        // ONE key (scrollable), never a fullHeight key alongside it. The stored
+        // code is also byte-DIFFERENT from what's returned, so the exact-match
+        // branch of currentVariant can't fire — this is the only case where
+        // Refresh does any actual work, and the one the naive
+        // "guess fullHeight, else throw" fallback broke.
+        const OLD_SCROLLABLE_SNIPPET =
+            '<div class="ceros-experience">https://view.ceros.com/ceros-qa/scrollable-one</div>'
+        const NEW_SCROLLABLE_SNIPPET =
+            '<div class="ceros-experience" data-refreshed="true">https://view.ceros.com/ceros-qa/scrollable-one</div>'
+        mockCallCerosAction.mockResolvedValue({
+            data: {
+                isFlex: false,
+                name: 'Scrollable One',
+                url: 'https://view.ceros.com/ceros-qa/scrollable-one',
+                embedCodes: { scrollable: NEW_SCROLLABLE_SNIPPET },
+            },
+        })
+        await renderLinked(OLD_SCROLLABLE_SNIPPET)
+
+        fireEvent.click(screen.getByRole('button', { name: /refresh embed code/i }))
+
+        await waitFor(() =>
+            expect(sdk.entry.fields.embedCode.setValue).toHaveBeenCalledWith(NEW_SCROLLABLE_SNIPPET)
+        )
+        expect(screen.queryByText(/error refreshing/i)).not.toBeInTheDocument()
+    })
+
+    it('never overwrites an inline entry with an iframe snippet when the model is missing inline (degraded resolveExperience response)', async () => {
+        // Designed, transient shape: resolveExperience falls back to fullHeight
+        // and flags inlineUnavailable when the Flex manifest can't be read (see
+        // functions/ceros-api.ts). An inline entry refreshed against this
+        // response has no exact match and no inline key to fall back to — the
+        // fallback must stay within the inline kind and surface an error
+        // rather than silently rewriting the author's inline choice as iframe
+        // HTML.
+        mockCallCerosAction.mockResolvedValue({
+            data: {
+                isFlex: true,
+                name: 'Fifth Brass Storm',
+                url: 'https://ceros-qa.ceros.site/fifth-brass-storm',
+                embedCodes: { fullHeight: IFRAME_SNIPPET },
+                inlineUnavailable: true,
+            },
+        })
+        await renderLinked(INLINE_SNIPPET)
+
+        fireEvent.click(screen.getByRole('button', { name: /refresh embed code/i }))
+
+        await waitFor(() => expect(screen.getByText(/error refreshing/i)).toBeInTheDocument())
+        expect(sdk.entry.fields.embedCode.setValue).not.toHaveBeenCalledWith(IFRAME_SNIPPET)
+        expect(sdk.entry.save).not.toHaveBeenCalled()
+    })
+
+    it('rolls back the in-memory draft when a refresh save fails, showing the save-failure note', async () => {
         const REFRESHED_INLINE_SNIPPET = '<div data-flex-inline data-embed-height="480"></div>'
         mockCallCerosAction.mockResolvedValue({
             data: { ...RESOLVED, embedCodes: { ...RESOLVED.embedCodes, inline: REFRESHED_INLINE_SNIPPET } },
@@ -455,8 +551,47 @@ describe('Entry — LinkedState refresh and embed style', () => {
 
         fireEvent.click(screen.getByRole('button', { name: /refresh embed code/i }))
 
-        await waitFor(() => expect(screen.getByText(/error refreshing/i)).toBeInTheDocument())
+        // A save/version-conflict failure during Refresh is a save problem, not
+        // a sign the experience is unpublished — it must show the save-failure
+        // note, not the "unlink and relink" resolve-failure message.
+        await waitFor(() => expect(screen.getByText(/couldn't save this entry/i)).toBeInTheDocument())
+        expect(screen.queryByText(/error refreshing/i)).not.toBeInTheDocument()
         expect(sdk.entry.fields.embedCode.setValue).toHaveBeenCalledWith(REFRESHED_INLINE_SNIPPET)
         expect(sdk.entry.fields.embedCode.setValue).toHaveBeenLastCalledWith(INLINE_SNIPPET)
+    })
+
+    it('shows a save-failure note, not the refresh/unlink message, when applying a new style fails to save', async () => {
+        mockCallCerosAction.mockResolvedValue({ data: RESOLVED })
+        await renderLinked(INLINE_SNIPPET)
+        sdk.entry.save.mockRejectedValueOnce(new Error('save failed'))
+
+        fireEvent.click(screen.getByRole('button', { name: /change embed style/i }))
+        await waitFor(() => expect(screen.getByLabelText(/full height/i)).toBeInTheDocument())
+
+        fireEvent.click(screen.getByLabelText(/full height/i))
+        fireEvent.click(screen.getByRole('button', { name: /use this style/i }))
+
+        await waitFor(() => expect(screen.getByText(/couldn't save this entry/i)).toBeInTheDocument())
+        expect(screen.queryByText(/error refreshing/i)).not.toBeInTheDocument()
+    })
+
+    it('clears a stale save-failure note once a retried style change succeeds', async () => {
+        mockCallCerosAction.mockResolvedValue({ data: RESOLVED })
+        await renderLinked(INLINE_SNIPPET)
+        sdk.entry.save.mockRejectedValueOnce(new Error('save failed'))
+
+        fireEvent.click(screen.getByRole('button', { name: /change embed style/i }))
+        await waitFor(() => expect(screen.getByLabelText(/full height/i)).toBeInTheDocument())
+        fireEvent.click(screen.getByLabelText(/full height/i))
+        fireEvent.click(screen.getByRole('button', { name: /use this style/i }))
+        await waitFor(() => expect(screen.getByText(/couldn't save this entry/i)).toBeInTheDocument())
+
+        // Retry the same pending choice — this time the save succeeds.
+        fireEvent.click(screen.getByRole('button', { name: /use this style/i }))
+
+        await waitFor(() =>
+            expect(sdk.entry.fields.embedCode.setValue).toHaveBeenLastCalledWith(IFRAME_SNIPPET)
+        )
+        expect(screen.queryByText(/couldn't save this entry/i)).not.toBeInTheDocument()
     })
 })

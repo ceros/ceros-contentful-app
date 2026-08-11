@@ -14,7 +14,7 @@ import React, { Dispatch, useEffect, useState } from 'react'
 
 import cerosLogo from '../assets/ceros-logo.svg'
 import styles from '../styles'
-import { getExperienceMetadata, parseCerosUrl } from '../oembed'
+import { parseCerosUrl } from '../oembed'
 import { AppInstallationParameters } from './ConfigScreen'
 import tokens from '@contentful/f36-tokens'
 import { ExperiencePicker, SelectedExperience } from './ExperiencePicker'
@@ -25,6 +25,22 @@ import { ConfirmationModel, EmbedVariant, ExperienceConfirmation } from '../Expe
 
 export { classifyEmbed } from '../embed-classify'
 export type { EmbedKind } from '../embed-classify'
+
+// Restores a field to a previously-captured value. getValue() returns
+// undefined for a field that was never set (e.g. a fresh entry) — setValue()
+// is the wrong API for clearing a field in that case (it also leaves an
+// unhandled promise), so an absent previous value is restored with
+// removeValue() instead.
+const restoreField = (
+    field: { setValue: (value: unknown) => unknown; removeValue: () => unknown },
+    previousValue: unknown
+) => {
+    if (previousValue === undefined) {
+        field.removeValue()
+    } else {
+        field.setValue(previousValue)
+    }
+}
 
 interface StateProps {
     entry: EntryAPI
@@ -46,6 +62,14 @@ function EmptyState({ entry, setLinked, parameters }: StateProps) {
     // picker and the paste flow so both save identically.
     const commit = (name: string, url: string, embedCode: string) => {
         setLoading(true)
+
+        // Capture the persisted values before writing the draft, so a failed
+        // save can roll the in-memory fields back instead of leaving the
+        // editor holding values that were never actually stored.
+        const previousTitle = entry.fields[parameters.titleFieldId].getValue()
+        const previousUrl = entry.fields[parameters.urlFieldId].getValue()
+        const previousEmbedCode = entry.fields[parameters.embedCodeFieldId].getValue()
+
         entry.fields[parameters.titleFieldId].setValue(name)
         entry.fields[parameters.urlFieldId].setValue(url)
         entry.fields[parameters.embedCodeFieldId].setValue(embedCode)
@@ -58,8 +82,15 @@ function EmptyState({ entry, setLinked, parameters }: StateProps) {
             })
             .catch((err) => {
                 console.error('Failed to save entry:', err)
+                // Flip the UI state first: if a rollback call below ever threw,
+                // the note would otherwise be dropped and the button would be
+                // stuck on its loading label — the exact failure mode the
+                // rollback itself was added to eliminate.
                 setSaveError(true)
                 setLoading(false)
+                restoreField(entry.fields[parameters.titleFieldId], previousTitle)
+                restoreField(entry.fields[parameters.urlFieldId], previousUrl)
+                restoreField(entry.fields[parameters.embedCodeFieldId], previousEmbedCode)
             })
     }
 
@@ -102,15 +133,15 @@ function EmptyState({ entry, setLinked, parameters }: StateProps) {
 
     return (
         <>
+            {saveError && (
+                <Box marginBottom="spacingM">
+                    <Note variant="negative">
+                        Couldn't save this entry. Please try again. If the problem persists, refresh Contentful and retry.
+                    </Note>
+                </Box>
+            )}
             {confirming ? (
                 <>
-                    {saveError && (
-                        <Box marginBottom="spacingM">
-                            <Note variant="negative">
-                                Couldn't save this entry. Please try again. If the problem persists, refresh Contentful and retry.
-                            </Note>
-                        </Box>
-                    )}
                     <img src={cerosLogo} alt="Ceros Logo" className={styles.logo} width="150px" />
                     <ExperienceConfirmation
                         model={confirming}
@@ -126,14 +157,6 @@ function EmptyState({ entry, setLinked, parameters }: StateProps) {
                         onClose={() => setIsChooserOpen(false)}
                         onSelect={handleSelectExperience}
                     />
-
-                    {saveError && (
-                        <Box marginBottom="spacingM">
-                            <Note variant="negative">
-                                Couldn't save this entry. Please try again. If the problem persists, refresh Contentful and retry.
-                            </Note>
-                        </Box>
-                    )}
 
                     {resolveError && (
                         <Box marginBottom="spacingM">
@@ -210,7 +233,17 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
 
     // State for refreshing embed code
     const [refreshLoading, setRefreshLoading] = useState(false)
+    // Set by a failure to RESOLVE the experience — refreshEmbedCode's or
+    // openStyleChooser's call to resolveLinked, or refreshEmbedCode finding no
+    // matching variant. The message is specifically about the experience being
+    // unreachable/unpublished, so it must never fire for a save problem.
     const [isRefreshError, setIsRefreshError] = useState(false)
+    // Set by a failed entry.save() — from refreshEmbedCode's write or
+    // applyStyle's write. Kept separate from isRefreshError so a save or
+    // version-conflict failure never shows advice ("unlink and relink") that's
+    // meant for an unresolvable experience — see EmptyState's
+    // saveError/resolveError split, which this mirrors.
+    const [isSaveError, setIsSaveError] = useState(false)
 
     // State for the embed code
     const [embedCode, setEmbedCode] = useState(entry.fields[parameters.embedCodeFieldId].getValue())
@@ -221,6 +254,7 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
 
     const [confirming, setConfirming] = useState<ConfirmationModel | null>(null)
     const [styleLoading, setStyleLoading] = useState(false)
+    const [applyingStyle, setApplyingStyle] = useState(false)
 
     // Resolves the linked experience's currently-available variants. Shared by
     // refresh and "Change embed style" so both see the same set.
@@ -234,15 +268,56 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
         return model
     }
 
-    // Refresh rewrites the embed code in the SAME format it was stored in.
-    // Routing everything through one format is what used to silently replace an
-    // inline snippet with iframe HTML.
+    // Identifies which variant is currently stored by matching the exact saved
+    // embed code against the model's available variants, rather than parsing
+    // markup — classifyEmbed only distinguishes inline/iframe/none, which isn't
+    // enough to tell scrollable from full-height.
+    //
+    // Without an exact match, the fallback is restricted to variants of the
+    // SAME embedKind the entry is actually stored as: an inline entry may only
+    // fall back to 'inline', and an iframe entry (full-height or scrollable)
+    // may only fall back to 'fullHeight' or 'scrollable' — never across the
+    // iframe/inline boundary. A cross-kind fallback would let a designed,
+    // transient resolveExperience response (`inlineUnavailable: true`, only an
+    // iframe key present — see functions/ceros-api.ts) silently rewrite an
+    // author's deliberate inline choice as an iframe snippet and report
+    // success, which is the exact silent-clobber this branch exists to
+    // eliminate. If nothing of the stored kind is available, the returned
+    // variant key is deliberately absent from the model so the caller's
+    // `model.embedCodes[currentVariant(model)]` resolves to undefined and its
+    // `if (!next) throw` fires — surfacing an error instead of a silent
+    // cross-kind rewrite.
+    const currentVariant = (model: ConfirmationModel): EmbedVariant => {
+        const match = (Object.entries(model.embedCodes) as [EmbedVariant, string | undefined][]).find(
+            ([, code]) => code === embedCode
+        )
+        if (match) return match[0]
+
+        if (embedKind === 'inline') return 'inline'
+
+        // Prefer fullHeight when both iframe variants are offered (matches the
+        // pre-existing preference elsewhere), but fall back to scrollable when
+        // the model only offers that — e.g. a scrollable-only Studio
+        // experience, which must keep resolving correctly.
+        return (['fullHeight', 'scrollable'] as const).find((v) => model.embedCodes[v]) ?? 'fullHeight'
+    }
+
+    // Refresh rewrites the embed code in the SAME variant it was stored in.
+    // classifyEmbed alone can't tell scrollable from full-height, so this uses
+    // currentVariant — the same lookup "Change embed style" uses to preselect
+    // — rather than guessing fullHeight ?? scrollable, which used to silently
+    // convert a deliberately-chosen Scrollable entry to full-height.
     const refreshEmbedCode = async () => {
         setRefreshLoading(true)
+        setIsRefreshError(false)
+        setIsSaveError(false)
+        // Distinguishes a save failure (routed to isSaveError below) from every
+        // other failure in this function (routed to isRefreshError), without
+        // losing that distinction if the rollback setValue itself throws.
+        let saveFailed = false
         try {
             const model = await resolveLinked()
-            const next =
-                embedKind === 'inline' ? model.embedCodes.inline : model.embedCodes.fullHeight ?? model.embedCodes.scrollable
+            const next = model.embedCodes[currentVariant(model)]
             if (!next) throw new Error('No matching embed code was returned for this experience.')
 
             // Capture the persisted value before writing the draft, so a failed
@@ -253,15 +328,21 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
             try {
                 await entry.save()
             } catch (saveErr) {
+                saveFailed = true
                 entry.fields[parameters.embedCodeFieldId].setValue(previous)
                 throw saveErr
             }
             setEmbedCode(next)
-            setIsRefreshError(false)
         } catch (err) {
             // Leave the stored value untouched on every failure path.
             console.error('Failed to refresh embed code:', err)
-            setIsRefreshError(true)
+            if (saveFailed) {
+                // A version conflict or transient save failure — not a sign the
+                // experience is unpublished, so never suggest unlinking here.
+                setIsSaveError(true)
+            } else {
+                setIsRefreshError(true)
+            }
         } finally {
             setRefreshLoading(false)
         }
@@ -270,6 +351,7 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
     const openStyleChooser = async () => {
         setStyleLoading(true)
         setIsRefreshError(false)
+        setIsSaveError(false)
         try {
             setConfirming(await resolveLinked())
         } catch (err) {
@@ -280,30 +362,32 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
         }
     }
 
-    // Identifies which variant is currently stored by matching the exact saved
-    // embed code against the model's available variants, rather than parsing
-    // markup — classifyEmbed only distinguishes inline/iframe/none, which isn't
-    // enough to tell scrollable from full-height. Falls back to the
-    // embedKind-based guess if nothing matches (e.g. the experience was
-    // republished upstream since this entry was linked).
-    const currentVariant = (model: ConfirmationModel): EmbedVariant => {
-        const match = (Object.entries(model.embedCodes) as [EmbedVariant, string | undefined][]).find(
-            ([, code]) => code === embedCode
-        )
-        return match ? match[0] : embedKind === 'inline' ? 'inline' : 'fullHeight'
-    }
-
     const applyStyle = async (nextEmbedCode: string) => {
+        setApplyingStyle(true)
+        // Clear both error states, not just this call's own: a prior failed
+        // Refresh could otherwise leave "unlink and relink" on screen above a
+        // style change that just succeeded.
+        setIsRefreshError(false)
+        setIsSaveError(false)
         const previous = embedCode
         entry.fields[parameters.embedCodeFieldId].setValue(nextEmbedCode)
         try {
-            await entry.save()
+            try {
+                await entry.save()
+            } catch (saveErr) {
+                entry.fields[parameters.embedCodeFieldId].setValue(previous)
+                throw saveErr
+            }
             setEmbedCode(nextEmbedCode)
             setConfirming(null)
         } catch (err) {
-            entry.fields[parameters.embedCodeFieldId].setValue(previous)
+            // A save failure here is a save/version-conflict problem, not a
+            // sign the experience is unpublished — keep it out of isRefreshError
+            // so the unlink/relink advice never shows for it.
             console.error('Failed to save embed style:', err)
-            setIsRefreshError(true)
+            setIsSaveError(true)
+        } finally {
+            setApplyingStyle(false)
         }
     }
 
@@ -314,6 +398,15 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
                     <Note variant="negative">
                         There was an error refreshing the embed code. Make sure the experience is still published. If
                         you still have trouble, try unlinking and relinking the experience.
+                    </Note>
+                </Box>
+            )}
+
+            {isSaveError && (
+                <Box marginBottom="spacingXl">
+                    <Note variant="negative">
+                        Couldn't save this entry. Please try again. If the problem persists, refresh Contentful and
+                        retry.
                     </Note>
                 </Box>
             )}
@@ -375,6 +468,7 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
                             onInsert={(nextEmbedCode) => applyStyle(nextEmbedCode)}
                             onBack={() => setConfirming(null)}
                             insertLabel="Use this style"
+                            isBusy={applyingStyle}
                         />
                     ) : (
                         <EmbedPreview embedCode={embedCode} />
