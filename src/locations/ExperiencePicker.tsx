@@ -4,22 +4,13 @@ import { useSDK } from '@contentful/react-apps-toolkit'
 import { css, cx, keyframes } from 'emotion'
 import React, { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { callCerosAction, findCerosActionId } from '../ceros-action'
+import { callCerosAction, findCerosActionId, Paging } from '../ceros-action'
 import { ConfirmationModel, EmbedVariant, ExperienceConfirmation } from '../ExperienceConfirmation'
 
 export interface SelectedExperience {
     name: string
     url: string
     embedCode: string
-}
-
-interface Paging {
-    total: number
-    page: number
-    pages: number
-    pageSize: number
-    next?: string
-    previous?: string
 }
 
 interface FolderNode {

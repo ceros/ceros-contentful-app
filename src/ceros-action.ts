@@ -1,8 +1,17 @@
 import { EditorAppSDK } from '@contentful/app-sdk'
 
+export interface Paging {
+    total: number
+    page: number
+    pages: number
+    pageSize: number
+    next?: string
+    previous?: string
+}
+
 export interface CerosActionResult {
     data?: any
-    paging?: any
+    paging?: Paging
     error?: string
 }
 
