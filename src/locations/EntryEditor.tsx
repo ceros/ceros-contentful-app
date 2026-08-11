@@ -14,12 +14,14 @@ import React, { Dispatch, useEffect, useState } from 'react'
 
 import cerosLogo from '../assets/ceros-logo.svg'
 import styles from '../styles'
-import { getExperienceMetadata } from '../oembed'
+import { getExperienceMetadata, parseCerosUrl } from '../oembed'
 import { AppInstallationParameters } from './ConfigScreen'
 import tokens from '@contentful/f36-tokens'
 import { ExperiencePicker, SelectedExperience } from './ExperiencePicker'
 import { classifyEmbed, EmbedKind } from '../embed-classify'
 import { EmbedPreview } from '../EmbedPreview'
+import { callCerosAction, findCerosActionId } from '../ceros-action'
+import { ConfirmationModel, EmbedVariant, ExperienceConfirmation } from '../ExperienceConfirmation'
 
 export { classifyEmbed } from '../embed-classify'
 export type { EmbedKind } from '../embed-classify'
@@ -31,45 +33,19 @@ interface StateProps {
 }
 
 function EmptyState({ entry, setLinked, parameters }: StateProps) {
+    const sdk = useSDK<EditorAppSDK>()
     const [experienceUrl, setExperienceUrl] = useState('')
     const [loading, setLoading] = useState(false)
     const [isCerosExperienceInvalid, setIsCerosExperienceInvalid] = useState(false)
     const [isChooserOpen, setIsChooserOpen] = useState(false)
     const [saveError, setSaveError] = useState(false)
+    const [confirming, setConfirming] = useState<ConfirmationModel | null>(null)
+    const [resolveError, setResolveError] = useState<string | null>(null)
 
-    const linkByUrl = async (url: string) => {
+    // Commits a chosen experience + embed code to the entry. Shared by the
+    // picker and the paste flow so both save identically.
+    const commit = (name: string, url: string, embedCode: string) => {
         setLoading(true)
-        setIsCerosExperienceInvalid(false)
-
-        const experienceMetadata = await getExperienceMetadata(url)
-
-        if (experienceMetadata) {
-            entry.fields[parameters.titleFieldId].setValue(experienceMetadata['title'])
-            entry.fields[parameters.urlFieldId].setValue(experienceMetadata['url'])
-            entry.fields[parameters.embedCodeFieldId].setValue(experienceMetadata['html'])
-
-            setSaveError(false)
-            entry.save()
-                .then(() => {
-                    setLoading(false)
-                    setLinked(true)
-                })
-                .catch((err) => {
-                    console.error('Failed to save entry after linking by URL:', err)
-                    setSaveError(true)
-                    setLoading(false)
-                })
-        } else {
-            console.error(`Couldn't get experience metadata for url: '${url}'`)
-            setIsCerosExperienceInvalid(true)
-            setLoading(false)
-        }
-    }
-
-    const handleSelectExperience = ({ name, url, embedCode }: SelectedExperience) => {
-        setIsChooserOpen(false)
-        setLoading(true)
-
         entry.fields[parameters.titleFieldId].setValue(name)
         entry.fields[parameters.urlFieldId].setValue(url)
         entry.fields[parameters.embedCodeFieldId].setValue(embedCode)
@@ -81,74 +57,140 @@ function EmptyState({ entry, setLinked, parameters }: StateProps) {
                 setLinked(true)
             })
             .catch((err) => {
-                console.error('Failed to save entry after selecting experience:', err)
+                console.error('Failed to save entry:', err)
                 setSaveError(true)
                 setLoading(false)
             })
     }
 
+    const linkByUrl = async (url: string) => {
+        setIsCerosExperienceInvalid(false)
+        setResolveError(null)
+        setSaveError(false)
+
+        // Keep the existing host allowlist as a cheap pre-filter. It no longer
+        // decides Flex vs Studio — the function's HEAD does that — it only keeps
+        // obviously non-Ceros URLs from reaching the function.
+        if (!parseCerosUrl(url)) {
+            setIsCerosExperienceInvalid(true)
+            return
+        }
+
+        setLoading(true)
+        try {
+            const actionId = await findCerosActionId(sdk)
+            const res = await callCerosAction(sdk, actionId, { action: 'resolveExperience', url })
+            if (res.error) throw new Error(String(res.error))
+
+            const d = res.data as ConfirmationModel
+            if (!d || !d.embedCodes || Object.keys(d.embedCodes).length === 0) {
+                throw new Error('No embed code could be generated for this experience.')
+            }
+            setConfirming(d)
+        } catch (err) {
+            console.error('Failed to resolve experience:', err)
+            setResolveError(err instanceof Error ? err.message : String(err))
+        } finally {
+            setLoading(false)
+        }
+    }
+
+    const handleSelectExperience = ({ name, url, embedCode }: SelectedExperience) => {
+        setIsChooserOpen(false)
+        commit(name, url, embedCode)
+    }
+
     return (
         <>
-            <ExperiencePicker
-                isShown={isChooserOpen}
-                onClose={() => setIsChooserOpen(false)}
-                onSelect={handleSelectExperience}
-            />
-
-            {saveError && (
-                <Box marginBottom="spacingM">
-                    <Note variant="negative">
-                        Couldn't save this entry. Please try again. If the problem persists, refresh Contentful and retry.
-                    </Note>
-                </Box>
-            )}
-
-            <img src={cerosLogo} alt="Ceros Logo" className={styles.logo} width="150px" />
-
-            <Paragraph>
-                Enter the link to your published Ceros experience below, or browse your experiences using the Ceros
-                API.
-            </Paragraph>
-
-            <Form onSubmit={() => linkByUrl(experienceUrl)}>
-                <FormControl isInvalid={isCerosExperienceInvalid}>
-                    <FormControl.Label isRequired>Ceros Experience URL</FormControl.Label>
-                    <TextInput
-                        value={experienceUrl}
-                        type="text"
-                        name="experienceUrl"
-                        placeholder="https://account.ceros.site/experience"
-                        onChange={(e) => setExperienceUrl(e.target.value)}
-                    />
-                    {isCerosExperienceInvalid && (
-                        <FormControl.ValidationMessage>
-                            The experience URL is invalid. Make sure it looks like
-                            'https://account.ceros.site/experience' or 'https://view.ceros.com/account/experience' and that the experience is published.
-                        </FormControl.ValidationMessage>
+            {confirming ? (
+                <>
+                    {saveError && (
+                        <Box marginBottom="spacingM">
+                            <Note variant="negative">
+                                Couldn't save this entry. Please try again. If the problem persists, refresh Contentful and retry.
+                            </Note>
+                        </Box>
                     )}
-                </FormControl>
+                    <img src={cerosLogo} alt="Ceros Logo" className={styles.logo} width="150px" />
+                    <ExperienceConfirmation
+                        model={confirming}
+                        onInsert={(embedCode) => commit(confirming.name, confirming.url, embedCode)}
+                        onBack={() => setConfirming(null)}
+                        isBusy={loading}
+                    />
+                </>
+            ) : (
+                <>
+                    <ExperiencePicker
+                        isShown={isChooserOpen}
+                        onClose={() => setIsChooserOpen(false)}
+                        onSelect={handleSelectExperience}
+                    />
 
-                <Flex gap="spacingM">
-                    <Button variant="positive" type="submit" isDisabled={loading} isLoading={loading}>
-                        {loading ? 'Linking Experience' : 'Link Experience'}
-                    </Button>
-                    <Button
-                        variant="secondary"
-                        isDisabled={loading}
-                        onClick={(e: React.MouseEvent) => {
-                            e.preventDefault()
-                            setIsChooserOpen(true)
-                        }}
-                    >
-                        Browse Experiences
-                    </Button>
-                </Flex>
-            </Form>
+                    {saveError && (
+                        <Box marginBottom="spacingM">
+                            <Note variant="negative">
+                                Couldn't save this entry. Please try again. If the problem persists, refresh Contentful and retry.
+                            </Note>
+                        </Box>
+                    )}
+
+                    {resolveError && (
+                        <Box marginBottom="spacingM">
+                            <Note variant="negative">{resolveError}</Note>
+                        </Box>
+                    )}
+
+                    <img src={cerosLogo} alt="Ceros Logo" className={styles.logo} width="150px" />
+
+                    <Paragraph>
+                        Enter the link to your published Ceros experience below, or browse your experiences using the Ceros
+                        API.
+                    </Paragraph>
+
+                    <Form onSubmit={() => linkByUrl(experienceUrl)}>
+                        <FormControl isInvalid={isCerosExperienceInvalid}>
+                            <FormControl.Label isRequired>Ceros Experience URL</FormControl.Label>
+                            <TextInput
+                                value={experienceUrl}
+                                type="text"
+                                name="experienceUrl"
+                                placeholder="https://account.ceros.site/experience"
+                                onChange={(e) => setExperienceUrl(e.target.value)}
+                            />
+                            {isCerosExperienceInvalid && (
+                                <FormControl.ValidationMessage>
+                                    The experience URL is invalid. Make sure it looks like
+                                    'https://account.ceros.site/experience' or 'https://view.ceros.com/account/experience' and that the experience is published.
+                                </FormControl.ValidationMessage>
+                            )}
+                        </FormControl>
+
+                        <Flex gap="spacingM">
+                            <Button variant="positive" type="submit" isDisabled={loading} isLoading={loading}>
+                                {loading ? 'Linking Experience' : 'Link Experience'}
+                            </Button>
+                            <Button
+                                variant="secondary"
+                                isDisabled={loading}
+                                onClick={(e: React.MouseEvent) => {
+                                    e.preventDefault()
+                                    setIsChooserOpen(true)
+                                }}
+                            >
+                                Browse Experiences
+                            </Button>
+                        </Flex>
+                    </Form>
+                </>
+            )}
         </>
     )
 }
 
 function LinkedState({ entry, setLinked, parameters }: StateProps) {
+    const sdk = useSDK<EditorAppSDK>()
+
     // State for unlinking experience
     const [unlinkLoading, setUnlinkLoading] = useState(false)
 
@@ -170,35 +212,100 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
     const [refreshLoading, setRefreshLoading] = useState(false)
     const [isRefreshError, setIsRefreshError] = useState(false)
 
-    // Fetches the embed code again and saves it to the entry
-    const refreshEmbedCode = async () => {
-        setRefreshLoading(true)
-
-        const experienceUrl = entry.fields[parameters.urlFieldId].getValue()
-        const experienceMetadata = await getExperienceMetadata(experienceUrl)
-
-        // Check if the metadata was able to be retrieved
-        if (experienceMetadata) {
-            entry.fields[parameters.embedCodeFieldId].setValue(experienceMetadata['html'])
-
-            entry.save().then(() => {
-                setEmbedCode(experienceMetadata['html'])
-                setIsRefreshError(false)
-                setRefreshLoading(false)
-            })
-        } else {
-            console.error(`Couldn't get experience metadata for url: '${experienceUrl}'`)
-            setIsRefreshError(true)
-            setRefreshLoading(false)
-        }
-    }
-
     // State for the embed code
     const [embedCode, setEmbedCode] = useState(entry.fields[parameters.embedCodeFieldId].getValue())
     const [embedKind, setEmbedKind] = useState<EmbedKind>('none')
     useEffect(() => {
         setEmbedKind(classifyEmbed(embedCode))
     }, [embedCode])
+
+    const [confirming, setConfirming] = useState<ConfirmationModel | null>(null)
+    const [styleLoading, setStyleLoading] = useState(false)
+
+    // Resolves the linked experience's currently-available variants. Shared by
+    // refresh and "Change embed style" so both see the same set.
+    const resolveLinked = async (): Promise<ConfirmationModel> => {
+        const experienceUrl = entry.fields[parameters.urlFieldId].getValue()
+        const actionId = await findCerosActionId(sdk)
+        const res = await callCerosAction(sdk, actionId, { action: 'resolveExperience', url: experienceUrl })
+        if (res.error) throw new Error(String(res.error))
+        const model = res.data as ConfirmationModel
+        if (!model?.embedCodes) throw new Error('No embed code could be generated for this experience.')
+        return model
+    }
+
+    // Refresh rewrites the embed code in the SAME format it was stored in.
+    // Routing everything through one format is what used to silently replace an
+    // inline snippet with iframe HTML.
+    const refreshEmbedCode = async () => {
+        setRefreshLoading(true)
+        try {
+            const model = await resolveLinked()
+            const next =
+                embedKind === 'inline' ? model.embedCodes.inline : model.embedCodes.fullHeight ?? model.embedCodes.scrollable
+            if (!next) throw new Error('No matching embed code was returned for this experience.')
+
+            // Capture the persisted value before writing the draft, so a failed
+            // save can roll the in-memory field back instead of leaving the
+            // editor showing a value that was never actually stored.
+            const previous = embedCode
+            entry.fields[parameters.embedCodeFieldId].setValue(next)
+            try {
+                await entry.save()
+            } catch (saveErr) {
+                entry.fields[parameters.embedCodeFieldId].setValue(previous)
+                throw saveErr
+            }
+            setEmbedCode(next)
+            setIsRefreshError(false)
+        } catch (err) {
+            // Leave the stored value untouched on every failure path.
+            console.error('Failed to refresh embed code:', err)
+            setIsRefreshError(true)
+        } finally {
+            setRefreshLoading(false)
+        }
+    }
+
+    const openStyleChooser = async () => {
+        setStyleLoading(true)
+        setIsRefreshError(false)
+        try {
+            setConfirming(await resolveLinked())
+        } catch (err) {
+            console.error('Failed to resolve experience:', err)
+            setIsRefreshError(true)
+        } finally {
+            setStyleLoading(false)
+        }
+    }
+
+    // Identifies which variant is currently stored by matching the exact saved
+    // embed code against the model's available variants, rather than parsing
+    // markup — classifyEmbed only distinguishes inline/iframe/none, which isn't
+    // enough to tell scrollable from full-height. Falls back to the
+    // embedKind-based guess if nothing matches (e.g. the experience was
+    // republished upstream since this entry was linked).
+    const currentVariant = (model: ConfirmationModel): EmbedVariant => {
+        const match = (Object.entries(model.embedCodes) as [EmbedVariant, string | undefined][]).find(
+            ([, code]) => code === embedCode
+        )
+        return match ? match[0] : embedKind === 'inline' ? 'inline' : 'fullHeight'
+    }
+
+    const applyStyle = async (nextEmbedCode: string) => {
+        const previous = embedCode
+        entry.fields[parameters.embedCodeFieldId].setValue(nextEmbedCode)
+        try {
+            await entry.save()
+            setEmbedCode(nextEmbedCode)
+            setConfirming(null)
+        } catch (err) {
+            entry.fields[parameters.embedCodeFieldId].setValue(previous)
+            console.error('Failed to save embed style:', err)
+            setIsRefreshError(true)
+        }
+    }
 
     return (
         <>
@@ -249,9 +356,29 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
                                 </Button>
                             </Form>
                         </Box>
+                        <Box marginRight="spacingM">
+                            <Button
+                                variant="secondary"
+                                isDisabled={unlinkLoading || refreshLoading || styleLoading}
+                                isLoading={styleLoading}
+                                onClick={openStyleChooser}
+                            >
+                                Change embed style
+                            </Button>
+                        </Box>
                     </Flex>
 
-                    <EmbedPreview embedCode={embedCode} />
+                    {confirming ? (
+                        <ExperienceConfirmation
+                            model={confirming}
+                            initialVariant={currentVariant(confirming)}
+                            onInsert={(nextEmbedCode) => applyStyle(nextEmbedCode)}
+                            onBack={() => setConfirming(null)}
+                            insertLabel="Use this style"
+                        />
+                    ) : (
+                        <EmbedPreview embedCode={embedCode} />
+                    )}
                 </>
             ) : (
                 <>
