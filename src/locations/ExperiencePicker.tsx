@@ -5,6 +5,7 @@ import { css, cx, keyframes } from 'emotion'
 import React, { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { callCerosAction, findCerosActionId } from '../ceros-action'
+import { ConfirmationModel, EmbedVariant, ExperienceConfirmation } from '../ExperienceConfirmation'
 
 export interface SelectedExperience {
     name: string
@@ -463,12 +464,7 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
     const [sort, setSort] = useState('last_created')
     // null = show all; 'flex' or 'studio' = only that type (client-side, loaded items only)
     const [typeFilter, setTypeFilter] = useState<null | 'flex' | 'studio'>(null)
-    type EmbedVariant = 'fullHeight' | 'scrollable' | 'inline'
-    const EMBED_VARIANTS: EmbedVariant[] = ['fullHeight', 'scrollable', 'inline']
-    const [selectedExperience, setSelectedExperience] = useState<
-        { exp: ExperienceNode; url: string; embedCodes: Partial<Record<EmbedVariant, string>> } | null
-    >(null)
-    const [selectedVariant, setSelectedVariant] = useState<EmbedVariant>('fullHeight')
+    const [confirming, setConfirming] = useState<ConfirmationModel | null>(null)
 
     const callFunction = (actionId: string, params: Record<string, unknown>) =>
         callCerosAction(sdk, actionId, params)
@@ -534,7 +530,7 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
             setExpError(null)
             setLoadingExpId(null)
             setAppActionId(null)
-            setSelectedExperience(null)
+            setConfirming(null)
             return
         }
 
@@ -621,14 +617,28 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
         try {
             const res = await callFunction(appActionId, { action: 'getEmbedCode', resourceId: exp.resourceId })
             if (res.error) throw new Error(String(res.error))
-            const d = (res.data as { fullHeightEmbedCode?: string; scrollableEmbedCode?: string; inlineEmbedCode?: string; url?: string }) ?? {}
+            const d = (res.data as {
+                fullHeightEmbedCode?: string
+                scrollableEmbedCode?: string
+                inlineEmbedCode?: string
+                url?: string
+                title?: string
+            }) ?? {}
+
             const embedCodes: Partial<Record<EmbedVariant, string>> = {}
             if (d.fullHeightEmbedCode) embedCodes.fullHeight = d.fullHeightEmbedCode
             if (d.scrollableEmbedCode) embedCodes.scrollable = d.scrollableEmbedCode
             if (d.inlineEmbedCode) embedCodes.inline = d.inlineEmbedCode
-            const defaultVariant = EMBED_VARIANTS.find((v) => embedCodes[v]) ?? 'fullHeight'
-            setSelectedVariant(defaultVariant)
-            setSelectedExperience({ exp, url: String(d.url ?? ''), embedCodes })
+
+            setConfirming({
+                // The list item's name is what the author just clicked on; prefer
+                // it over the API title so the screen matches the card.
+                name: exp.name,
+                url: String(d.url ?? ''),
+                thumbnailUrl: exp.thumbnailUrl,
+                isFlex: exp.isFlexExperience,
+                embedCodes,
+            })
             setLoadingExpId(null)
         } catch (err) {
             console.error('[CerosApi] getEmbedCode error:', err)
@@ -637,18 +647,11 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
         }
     }
 
-    const handleInsert = () => {
-        if (!selectedExperience) return
-        const { exp, url, embedCodes } = selectedExperience
-        onSelect({ name: exp.name, url, embedCode: embedCodes[selectedVariant] ?? '' })
+    const handleInsert = (embedCode: string) => {
+        if (!confirming) return
+        onSelect({ name: confirming.name, url: confirming.url, embedCode })
     }
-    const handleBackToBrowse = () => setSelectedExperience(null)
-
-    const VARIANT_LABELS: Record<EmbedVariant, string> = {
-        fullHeight: 'Full height (iframe)',
-        scrollable: 'Scrollable (iframe)',
-        inline: 'Inline',
-    }
+    const handleBackToBrowse = () => setConfirming(null)
 
     const childrenOf = (folder: FolderNode): FolderNode[] =>
         folder.children.length > 0 ? folder.children : folderChildren[folder.resourceId] ?? []
@@ -798,44 +801,16 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
 
                 {/* Scrollable body */}
                 <div style={s.scrollArea}>
-                    {selectedExperience ? (
+                    {confirming ? (
                         <div>
                             <button type="button" className={crumbBtnClass} onClick={handleBackToBrowse} style={{ marginBottom: 20 }}>
                                 ‹ Back to browsing
                             </button>
-                            <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start' }}>
-                                <div style={{ ...s.cardThumb, width: 280, flexShrink: 0, borderRadius: 8, border: '1px solid #DCDFE1' }}>
-                                    {selectedExperience.exp.thumbnailUrl
-                                        ? <img src={selectedExperience.exp.thumbnailUrl} alt="" style={s.cardThumbImg} />
-                                        : <div style={{ width: '100%', height: '100%', background: '#E9EBEC' }} />}
-                                </div>
-                                <div style={{ flex: 1 }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                                        <h2 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>{selectedExperience.exp.name}</h2>
-                                        <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 10, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#636567', border: '1px solid #DCDFE1', borderRadius: 999, padding: '3px 8px' }}>
-                                            {selectedExperience.exp.isFlexExperience ? 'Flex' : 'Studio'}
-                                        </span>
-                                    </div>
-                                    {selectedExperience.url && (
-                                        <div style={{ fontSize: 13, color: '#636567', marginTop: 6, wordBreak: 'break-all' }}>{selectedExperience.url}</div>
-                                    )}
-                                    <div style={{ ...s.eyebrow, marginTop: 24 }}>Embed style</div>
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
-                                        {EMBED_VARIANTS
-                                            .filter((v) => selectedExperience.embedCodes[v])
-                                            .map((v) => (
-                                                <label key={v} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, cursor: 'pointer' }}>
-                                                    <input type="radio" name="embed-variant" checked={selectedVariant === v} onChange={() => setSelectedVariant(v)} />
-                                                    {VARIANT_LABELS[v]}
-                                                </label>
-                                            ))}
-                                    </div>
-                                    <div style={{ display: 'flex', gap: 12, marginTop: 28 }}>
-                                        <button type="button" className={folderRowClass} style={{ width: 'auto', padding: '10px 18px' }} onClick={handleBackToBrowse}>Back</button>
-                                        <button type="button" className={folderRowClass} disabled={!selectedExperience.embedCodes[selectedVariant]} style={{ width: 'auto', padding: '10px 18px', background: '#000', color: '#fff', borderColor: '#000', opacity: selectedExperience.embedCodes[selectedVariant] ? 1 : 0.5, cursor: selectedExperience.embedCodes[selectedVariant] ? 'pointer' : 'not-allowed' }} onClick={handleInsert}>Insert</button>
-                                    </div>
-                                </div>
-                            </div>
+                            <ExperienceConfirmation
+                                model={confirming}
+                                onInsert={handleInsert}
+                                onBack={handleBackToBrowse}
+                            />
                         </div>
                     ) : (
                         <>
