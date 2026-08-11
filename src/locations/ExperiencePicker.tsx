@@ -4,6 +4,7 @@ import { useSDK } from '@contentful/react-apps-toolkit'
 import { css, cx, keyframes } from 'emotion'
 import React, { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { callCerosAction, findCerosActionId } from '../ceros-action'
 
 export interface SelectedExperience {
     name: string
@@ -469,22 +470,8 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
     >(null)
     const [selectedVariant, setSelectedVariant] = useState<EmbedVariant>('fullHeight')
 
-    const callFunction = async (actionId: string, params: Record<string, unknown>) => {
-        const call = await sdk.cma.appActionCall.createWithResult(
-            {
-                spaceId: sdk.ids.space,
-                environmentId: sdk.ids.environment,
-                appDefinitionId: sdk.ids.app || '',
-                appActionId: actionId,
-            },
-            { parameters: params }
-        )
-        if (call.sys.status === 'failed') {
-            const err = (call.sys as any).error
-            throw new Error(`Function call failed: ${err?.message ?? JSON.stringify(err)}`)
-        }
-        return (call.sys as any).result as { data?: any; paging?: Paging | null; error?: string }
-    }
+    const callFunction = (actionId: string, params: Record<string, unknown>) =>
+        callCerosAction(sdk, actionId, params)
 
     // Single source of truth for the current folder's list query (sort +
     // search). Both the fetch effect and pagination read it, so they stay
@@ -555,16 +542,7 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
         setError(null)
         ;(async () => {
             try {
-                const actionsResponse = await sdk.cma.appAction.getMany({
-                    organizationId: sdk.ids.organization,
-                    appDefinitionId: sdk.ids.app || '',
-                })
-                const cerosAction = actionsResponse.items.find((a) => a.name === 'CerosApi')
-                if (!cerosAction) {
-                    setError('The CerosApi App Action is not set up. Run "npm run create-app-action" after deploying.')
-                    return
-                }
-                const actionId = cerosAction.sys.id
+                const actionId = await findCerosActionId(sdk)
                 setAppActionId(actionId)
                 const treeResult = await callFunction(actionId, {
                     action: 'getFolderTree',
