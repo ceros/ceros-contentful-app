@@ -94,10 +94,16 @@ function EmptyState({ entry, setLinked, parameters }: StateProps) {
             })
     }
 
-    const linkByUrl = async (url: string) => {
+    const linkByUrl = async (rawUrl: string) => {
         setIsCerosExperienceInvalid(false)
         setResolveError(null)
         setSaveError(false)
+
+        // Copied URLs routinely arrive with surrounding whitespace or a trailing
+        // newline. Trim once here so everything downstream — the pre-filter, the
+        // function call, and the oEmbed query the function builds from this
+        // string — sees the same clean value.
+        const url = rawUrl.trim()
 
         // Keep the existing host allowlist as a cheap pre-filter. It no longer
         // decides Flex vs Studio — the function's HEAD does that — it only keeps

@@ -595,3 +595,46 @@ describe('Entry — LinkedState refresh and embed style', () => {
         expect(screen.queryByText(/couldn't save this entry/i)).not.toBeInTheDocument()
     })
 })
+
+describe('Entry — EmptyState trims the pasted URL', () => {
+    let sdk: ReturnType<typeof makeMockSdk>
+
+    beforeEach(() => {
+        vi.clearAllMocks()
+        sdk = makeMockSdk()
+        mockUseSDK.mockReturnValue(sdk as any)
+        mockFindCerosActionId.mockResolvedValue('action-1')
+    })
+
+    const pasteAndSubmit = async (url: string) => {
+        render(<Entry />)
+        const input = await screen.findByPlaceholderText(/https:\/\/account\.ceros\.site\//i)
+        fireEvent.change(input, { target: { value: url } })
+        fireEvent.submit(input.closest('form')!)
+    }
+
+    it('sends a trimmed URL to the function', async () => {
+        mockCallCerosAction.mockResolvedValue({
+            data: {
+                isFlex: true, name: 'Fifth Brass Storm',
+                url: 'https://ceros-qa.ceros.site/fifth-brass-storm',
+                embedCodes: { fullHeight: '<iframe></iframe>' },
+            },
+        })
+
+        await pasteAndSubmit('  https://ceros-qa.ceros.site/fifth-brass-storm\n')
+
+        await waitFor(() => expect(mockCallCerosAction).toHaveBeenCalled())
+        expect(mockCallCerosAction).toHaveBeenCalledWith(expect.anything(), 'action-1', {
+            action: 'resolveExperience',
+            url: 'https://ceros-qa.ceros.site/fifth-brass-storm',
+        })
+    })
+
+    it('rejects a whitespace-only paste without calling the function', async () => {
+        await pasteAndSubmit('   ')
+
+        await waitFor(() => expect(screen.getByText(/experience URL is invalid/i)).toBeInTheDocument())
+        expect(mockCallCerosAction).not.toHaveBeenCalled()
+    })
+})

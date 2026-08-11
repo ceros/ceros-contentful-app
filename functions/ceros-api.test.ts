@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { handler } from './ceros-api'
 
 type JsonResponse = { ok: boolean; status: number; json: () => Promise<any>; text: () => Promise<string> }
@@ -85,7 +87,18 @@ function headResponse(headers: Record<string, string>, url: string = FLEX_PAGE) 
 }
 
 const MANIFEST_BODY = {
-    pageMetadata: { title: 'Fifth Brass Storm', canonicalUrl: `${FLEX_PAGE}/page-1`, locale: 'en', seoMode: 'default' },
+    experience: {
+        slug: 'fifth-brass-storm',
+        accountSlug: 'ceros-qa',
+        pageSlug: 'page-1',
+        pageNumber: 1,
+        experienceResourceId: 'exp-123',
+        title: 'Fifth Brass Storm',
+    },
+    // Deliberately different from experience.title: pageMetadata.title is the
+    // page's rendered <title>, so an implementation reading it would name the
+    // page instead of the experience.
+    pageMetadata: { title: 'Fifth Brass Storm — Page 1', canonicalUrl: `${FLEX_PAGE}/page-1`, locale: 'en', seoMode: 'default' },
     deliveryModes: {
         iframe: { snippet: '<iframe src="https://ceros-qa.ceros.site/fifth-brass-storm"></iframe>' },
         inline: { snippet: '<div data-flex-inline data-flex-manifest-url="' + MANIFEST_URL + '" data-embed-height="auto"></div><script src="https://assets.ceros.site/js/flex-client.js"></script>' },
@@ -110,6 +123,52 @@ describe('ceros-api function — resolveExperience', () => {
         expect(data.embedCodes.inline).toContain('data-flex-inline')
         // The experience root, NOT the page-scoped canonicalUrl.
         expect(data.url).toBe(FLEX_PAGE)
+    })
+
+    it('names the experience from experience.title, not the page-scoped pageMetadata.title', async () => {
+        vi.mocked(fetch)
+            .mockResolvedValueOnce(headResponse({ 'x-flex-manifest': MANIFEST_URL }) as any)
+            .mockResolvedValueOnce(jsonOk(MANIFEST_BODY) as any)
+
+        const result = await handler(makeEvent({ action: 'resolveExperience', url: FLEX_PAGE }), makeContext() as any)
+
+        expect((result.data as any).name).toBe('Fifth Brass Storm')
+        expect((result.data as any).name).not.toBe(MANIFEST_BODY.pageMetadata.title)
+    })
+
+    it('falls back to the manifest experience slug when the SEO title is unset', async () => {
+        // The SEO title is optional and unset by default, and manifests
+        // published before the field shipped omit it entirely — both land here.
+        const { title: _unset, ...experienceWithoutTitle } = MANIFEST_BODY.experience
+        vi.mocked(fetch)
+            .mockResolvedValueOnce(headResponse({ 'x-flex-manifest': MANIFEST_URL }) as any)
+            .mockResolvedValueOnce(jsonOk({ ...MANIFEST_BODY, experience: experienceWithoutTitle }) as any)
+
+        const result = await handler(makeEvent({ action: 'resolveExperience', url: FLEX_PAGE }), makeContext() as any)
+        expect((result.data as any).name).toBe('fifth-brass-storm')
+    })
+
+    it('falls back to the URL slug when the manifest carries no experience block', async () => {
+        vi.mocked(fetch)
+            .mockResolvedValueOnce(headResponse({ 'x-flex-manifest': MANIFEST_URL }) as any)
+            .mockResolvedValueOnce(jsonOk({ deliveryModes: MANIFEST_BODY.deliveryModes }) as any)
+
+        const result = await handler(makeEvent({ action: 'resolveExperience', url: FLEX_PAGE }), makeContext() as any)
+        expect((result.data as any).name).toBe('fifth-brass-storm')
+    })
+
+    it('falls back to the URL slug when oEmbed returns no title', async () => {
+        vi.mocked(fetch)
+            .mockResolvedValueOnce(headResponse({}, STUDIO_PAGE) as any)
+            .mockResolvedValueOnce(jsonOk({
+                url: null, title: '',
+                html: '<div class="ceros-experience"></div>', embedType: 'full-height',
+            }) as any)
+
+        const result = await handler(makeEvent({ action: 'resolveExperience', url: STUDIO_PAGE }), makeContext() as any)
+        // view.ceros.com/<account>/<experience> — the experience slug is the
+        // last segment of the root, not the account.
+        expect((result.data as any).name).toBe('untitled-85')
     })
 
     it('needs no API key', async () => {
@@ -330,5 +389,72 @@ describe('ceros-api function — resolveExperience', () => {
         expect(String(result.error)).toContain('invalid')
         // Rejected right after the HEAD — no manifest or oEmbed fetch follows.
         expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1)
+    })
+})
+
+// The function runs in a Contentful Functions sandbox that only permits
+// outbound requests to hosts declared in contentful-app-manifest.json's
+// allowNetworks. A request to an undeclared host throws, which this handler
+// catches and reports as an invalid URL — so a missing entry looks exactly
+// like a bad paste, with nothing failing until it runs in Contentful.
+// Nothing else ties the manifest to the hosts the code actually fetches.
+describe('ceros-api function — network allowlist', () => {
+    const manifest = JSON.parse(
+        readFileSync(resolve(process.cwd(), 'contentful-app-manifest.json'), 'utf8')
+    )
+    const allowNetworks: string[] = manifest.functions.find((f: any) => f.id === 'CerosApi').allowNetworks
+
+    it('allows the Ceros REST API used by the folder and embed-code actions', () => {
+        expect(allowNetworks).toContain('rest.ceros.com')
+    })
+
+    it('allows the Flex hosts resolveExperience fetches: the page, its manifest, and its oEmbed route', () => {
+        expect(allowNetworks).toContain('*.ceros.site')
+    })
+
+    it('allows the Studio host resolveExperience fetches for oEmbed', () => {
+        expect(allowNetworks).toContain('view.ceros.com')
+    })
+})
+
+describe('ceros-api function — whitespace in the pasted URL', () => {
+    beforeEach(() => vi.stubGlobal('fetch', vi.fn()))
+    afterEach(() => vi.unstubAllGlobals())
+
+    // A pasted URL routinely carries surrounding whitespace. new URL() strips it,
+    // so the host gate passes — but the oEmbed query is built by encoding the RAW
+    // string, which bakes %20/%0A into the lookup and fails upstream with the
+    // generic invalid-URL message. This action is CMA-invokable, so it cannot
+    // rely on the browser having trimmed first.
+    it('trims the pasted URL before building the oEmbed query', async () => {
+        vi.mocked(fetch)
+            .mockResolvedValueOnce(headResponse({}) as any)
+            .mockResolvedValueOnce(jsonOk({
+                url: null, title: 'Untitled 85',
+                html: '<div class="ceros-experience"></div>', embedType: 'full-height',
+            }) as any)
+
+        await handler(makeEvent({ action: 'resolveExperience', url: '  ' + STUDIO_PAGE + '\n' }), makeContext() as any)
+
+        const oembedCall = String(vi.mocked(fetch).mock.calls[1][0])
+        expect(oembedCall).toBe('https://view.ceros.com/oembed?url=' + encodeURIComponent(STUDIO_PAGE))
+        expect(oembedCall).not.toContain('%20')
+        expect(oembedCall).not.toContain('%0A')
+    })
+
+    it('trims before the HEAD request too', async () => {
+        vi.mocked(fetch)
+            .mockResolvedValueOnce(headResponse({ 'x-flex-manifest': MANIFEST_URL }) as any)
+            .mockResolvedValueOnce(jsonOk(MANIFEST_BODY) as any)
+
+        await handler(makeEvent({ action: 'resolveExperience', url: '\t' + FLEX_PAGE + '  ' }), makeContext() as any)
+
+        expect(String(vi.mocked(fetch).mock.calls[0][0])).toBe(FLEX_PAGE)
+    })
+
+    it('rejects a url that is only whitespace', async () => {
+        const result = await handler(makeEvent({ action: 'resolveExperience', url: '   ' }), makeContext() as any)
+        expect(String(result.error)).toContain('url is required')
+        expect(fetch).not.toHaveBeenCalled()
     })
 })

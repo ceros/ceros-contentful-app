@@ -148,6 +148,17 @@ function experienceRoot(rawUrl: string): string {
   return `${url.origin}/${segments.slice(0, keep).join('/')}`
 }
 
+// The experience's own slug — the last-resort label when nothing on the wire
+// carries a title. Every URL this action accepts ends in it (…/<experience> on
+// *.ceros.site, …/<account>/<experience> on view.ceros.com) and experienceRoot()
+// has already narrowed `root` to exactly those segments, so the final segment is
+// the slug on both hosts. `root` came out of a successful new URL() there, so
+// parsing it again cannot throw.
+function slugFromRoot(root: string): string {
+  const segments = new URL(root).pathname.split('/').filter(Boolean)
+  return segments[segments.length - 1] ?? ''
+}
+
 // Returns null on any transport, status, or parse failure so callers can take
 // their degraded path without a try/catch at every site.
 async function fetchJson(target: string): Promise<any | null> {
@@ -174,7 +185,7 @@ async function resolveViaOembed(
   return {
     data: {
       isFlex,
-      name: String(oembed.title ?? ''),
+      name: String(oembed.title || slugFromRoot(root)),
       url: root,
       embedCodes: { [variant]: String(html) },
       // Reached the Flex branch but could not read deliveryModes: offer the
@@ -336,16 +347,25 @@ async function run(
     case 'resolveExperience': {
       // Deliberately no requireApiKey: this reads public pages, and the paste
       // flow must keep working on installs that never configured a key.
-      if (!url) return { error: 'url is required' }
+      //
+      // Trim before anything else. A pasted URL routinely carries surrounding
+      // whitespace, and new URL() strips it when parsing — so the host gate and
+      // experienceRoot() below would both succeed on an untrimmed string while
+      // resolveViaOembed, which encodes the raw string into a query parameter,
+      // would bake %20/%0A into the oEmbed lookup and fail upstream with the
+      // generic invalid-URL message. The browser trims too, but this action is
+      // CMA-invokable, so it cannot rely on that.
+      const pastedUrl = typeof url === 'string' ? url.trim() : ''
+      if (!pastedUrl) return { error: 'url is required' }
 
       // The browser-side gate in src/oembed.ts does not protect this action:
       // it can be invoked directly through the CMA. Gate independently here,
       // before the first fetch.
-      if (!isAllowedCerosUrl(url, { allowViewCeros: true })) return { error: INVALID_URL_ERROR }
+      if (!isAllowedCerosUrl(pastedUrl, { allowViewCeros: true })) return { error: INVALID_URL_ERROR }
 
       let head: Response
       try {
-        head = await fetch(url, { method: 'HEAD' })
+        head = await fetch(pastedUrl, { method: 'HEAD' })
       } catch {
         return { error: INVALID_URL_ERROR }
       }
@@ -358,9 +378,9 @@ async function run(
       // runtimes (it's a Response property, not guaranteed non-empty) — fall
       // back to the pasted url, which was already validated above and carries
       // no less information when there's no redirect to check.
-      if (!isAllowedCerosUrl(head.url || url, { allowViewCeros: true })) return { error: INVALID_URL_ERROR }
+      if (!isAllowedCerosUrl(head.url || pastedUrl, { allowViewCeros: true })) return { error: INVALID_URL_ERROR }
 
-      const root = experienceRoot(url)
+      const root = experienceRoot(pastedUrl)
 
       // Route on x-flex-manifest, not the hostname. It is authoritative, it is
       // the one header with a documented contract, and its value — the
@@ -387,7 +407,19 @@ async function run(
             return {
               data: {
                 isFlex: true,
-                name: String(manifest?.pageMetadata?.title ?? ''),
+                // experience.title is the experience's own label (the author-set
+                // SEO title, snapshotted at publish). Deliberately NOT
+                // pageMetadata.title, which is the *page's* rendered <title> and
+                // resolves page title tag -> SEO title -> page label, so on any
+                // page that sets its own title tag it names the page, not the
+                // experience. It is optional twice over — unset by default, and
+                // absent from manifests published before the field shipped — so
+                // fall back to the experience slug rather than an empty title.
+                name: String(
+                  manifest?.experience?.title ||
+                    manifest?.experience?.slug ||
+                    slugFromRoot(root)
+                ),
                 url: root,
                 embedCodes: {
                   ...(fullHeight ? { fullHeight: String(fullHeight) } : {}),
@@ -405,7 +437,7 @@ async function run(
         // Manifest URL failed validation, was unreachable, or had no usable
         // deliveryModes: degrade to oEmbed on the same origin rather than
         // blocking the insert.
-        return await resolveViaOembed(url, root, true)
+        return await resolveViaOembed(pastedUrl, root, true)
       }
 
       // No manifest header. Per the documented contract the header appears only
@@ -416,7 +448,7 @@ async function run(
         return { error: UNPUBLISHED_FLEX_ERROR }
       }
 
-      return await resolveViaOembed(url, root, false)
+      return await resolveViaOembed(pastedUrl, root, false)
     }
 
     default:
