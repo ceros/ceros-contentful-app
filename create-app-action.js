@@ -46,7 +46,7 @@ const ACTION_DEFINITION = {
       name: 'Action',
       type: 'Symbol',
       required: true,
-      description: 'One of: getFolderTree | getFolderExperiences | getEmbedCode',
+      description: 'One of: getFolderTree | getFolderExperiences | getEmbedCode | resolveExperience',
     },
     {
       id: 'folderId',
@@ -68,6 +68,13 @@ const ACTION_DEFINITION = {
       type: 'Symbol',
       required: false,
       description: 'JSON string of query params for the target endpoint (whitelisted per action)',
+    },
+    {
+      id: 'url',
+      name: 'Experience URL',
+      type: 'Symbol',
+      required: false,
+      description: 'Required for resolveExperience — the pasted experience URL',
     },
   ],
 }
