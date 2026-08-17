@@ -4,16 +4,16 @@ import { classifyEmbed } from './embed-classify'
 // The live inline snippet, including the data-embed-height attribute that the
 // server emits but older local copies of the snippet builder do not.
 const INLINE_SNIPPET =
-    '<div data-flex-inline data-flex-manifest-url="https://ceros-qa.ceros.site/fifth-brass-storm/manifest.v1.json" data-embed-height="auto"></div>' +
+    '<div data-flex-inline data-flex-manifest-url="https://myaccount.ceros.site/flex-experience/manifest.v1.json" data-embed-height="auto"></div>' +
     '<script src="https://assets.ceros.site/js/flex-client.js"></script>'
 
 const STUDIO_IFRAME =
     '<div class="ceros-experience" style="position:relative;width:auto;padding:0 0 56.25%;height:0;">' +
-    '<iframe allowfullscreen src="https://view.ceros.com/ceros-qa/untitled-85" style="position:absolute;top:0;left:0;width:100%;height:100%;border:0"></iframe></div>' +
+    '<iframe allowfullscreen src="https://view.ceros.com/myaccount/studio-experience" style="position:absolute;top:0;left:0;width:100%;height:100%;border:0"></iframe></div>' +
     '<script type="text/javascript" src="https://view.ceros.com/scroll-proxy.min.js" data-ceros-origin-domains="view.ceros.com"></script>'
 
 const FLEX_IFRAME =
-    '<iframe src="https://ceros-qa.ceros.site/fifth-brass-storm" width="100%" height="600" frameborder="0"></iframe>'
+    '<iframe src="https://myaccount.ceros.site/flex-experience" width="100%" height="600" frameborder="0"></iframe>'
 
 describe('classifyEmbed', () => {
     it('classifies the live inline snippet as inline', () => {

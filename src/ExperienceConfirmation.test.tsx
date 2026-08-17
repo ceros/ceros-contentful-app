@@ -5,7 +5,7 @@ import { ExperienceConfirmation, ConfirmationModel } from './ExperienceConfirmat
 
 const base: ConfirmationModel = {
     name: 'Fifth Brass Storm',
-    url: 'https://ceros-qa.ceros.site/fifth-brass-storm',
+    url: 'https://myaccount.ceros.site/flex-experience',
     isFlex: true,
     embedCodes: {},
 }

@@ -28,7 +28,7 @@ describe('ceros-api function — getEmbedCode', () => {
     it('reads url and title from the response instead of scraping the embed HTML', async () => {
         vi.mocked(fetch).mockResolvedValue(
             jsonOk({
-                viewUrl: 'https://ceros-qa.ceros.site/fifth-brass-storm',
+                viewUrl: 'https://myaccount.ceros.site/flex-experience',
                 title: 'Fifth Brass Storm',
                 assetBaseUrl: 'https://assets.ceros.site',
                 experienceAlias: '',
@@ -42,7 +42,7 @@ describe('ceros-api function — getEmbedCode', () => {
 
         // The decoy src in fullHeightEmbedCode is what the old scraper would
         // have returned. viewUrl is the correct answer.
-        expect((result.data as any).url).toBe('https://ceros-qa.ceros.site/fifth-brass-storm')
+        expect((result.data as any).url).toBe('https://myaccount.ceros.site/flex-experience')
         expect((result.data as any).title).toBe('Fifth Brass Storm')
         expect((result.data as any).inlineEmbedCode).toBe('<div data-flex-inline></div>')
     })
@@ -66,12 +66,12 @@ describe('ceros-api function — getEmbedCode', () => {
     })
 })
 
-const MANIFEST_URL = 'https://ceros-qa.ceros.site/fifth-brass-storm/manifest.v1.json'
+const MANIFEST_URL = 'https://myaccount.ceros.site/flex-experience/manifest.v1.json'
 // Deliberately a different path than FLEX_PAGE + '/manifest.v1.json', so a
 // concatenating implementation can't accidentally match it.
-const DISTINCT_MANIFEST_URL = 'https://ceros-qa.ceros.site/some-other-path/manifest.v1.json'
-const FLEX_PAGE = 'https://ceros-qa.ceros.site/fifth-brass-storm'
-const STUDIO_PAGE = 'https://view.ceros.com/ceros-qa/untitled-85/p/1'
+const DISTINCT_MANIFEST_URL = 'https://myaccount.ceros.site/some-other-path/manifest.v1.json'
+const FLEX_PAGE = 'https://myaccount.ceros.site/flex-experience'
+const STUDIO_PAGE = 'https://view.ceros.com/myaccount/studio-experience/p/1'
 
 // `url` mirrors fetch's Response.url — the final URL after any redirects —
 // so tests can simulate a HEAD landing off-host.
@@ -88,8 +88,8 @@ function headResponse(headers: Record<string, string>, url: string = FLEX_PAGE) 
 
 const MANIFEST_BODY = {
     experience: {
-        slug: 'fifth-brass-storm',
-        accountSlug: 'ceros-qa',
+        slug: 'flex-experience',
+        accountSlug: 'myaccount',
         pageSlug: 'page-1',
         pageNumber: 1,
         experienceResourceId: 'exp-123',
@@ -100,7 +100,7 @@ const MANIFEST_BODY = {
     // page instead of the experience.
     pageMetadata: { title: 'Fifth Brass Storm — Page 1', canonicalUrl: `${FLEX_PAGE}/page-1`, locale: 'en', seoMode: 'default' },
     deliveryModes: {
-        iframe: { snippet: '<iframe src="https://ceros-qa.ceros.site/fifth-brass-storm"></iframe>' },
+        iframe: { snippet: '<iframe src="https://myaccount.ceros.site/flex-experience"></iframe>' },
         inline: { snippet: '<div data-flex-inline data-flex-manifest-url="' + MANIFEST_URL + '" data-embed-height="auto"></div><script src="https://assets.ceros.site/js/flex-client.js"></script>' },
     },
 }
@@ -145,7 +145,7 @@ describe('ceros-api function — resolveExperience', () => {
             .mockResolvedValueOnce(jsonOk({ ...MANIFEST_BODY, experience: experienceWithoutTitle }) as any)
 
         const result = await handler(makeEvent({ action: 'resolveExperience', url: FLEX_PAGE }), makeContext() as any)
-        expect((result.data as any).name).toBe('fifth-brass-storm')
+        expect((result.data as any).name).toBe('flex-experience')
     })
 
     it('falls back to the URL slug when the manifest carries no experience block', async () => {
@@ -154,7 +154,7 @@ describe('ceros-api function — resolveExperience', () => {
             .mockResolvedValueOnce(jsonOk({ deliveryModes: MANIFEST_BODY.deliveryModes }) as any)
 
         const result = await handler(makeEvent({ action: 'resolveExperience', url: FLEX_PAGE }), makeContext() as any)
-        expect((result.data as any).name).toBe('fifth-brass-storm')
+        expect((result.data as any).name).toBe('flex-experience')
     })
 
     it('falls back to the URL slug when oEmbed returns no title', async () => {
@@ -168,7 +168,7 @@ describe('ceros-api function — resolveExperience', () => {
         const result = await handler(makeEvent({ action: 'resolveExperience', url: STUDIO_PAGE }), makeContext() as any)
         // view.ceros.com/<account>/<experience> — the experience slug is the
         // last segment of the root, not the account.
-        expect((result.data as any).name).toBe('untitled-85')
+        expect((result.data as any).name).toBe('studio-experience')
     })
 
     it('needs no API key', async () => {
@@ -208,7 +208,7 @@ describe('ceros-api function — resolveExperience', () => {
         expect(data.embedCodes.fullHeight).toContain('ceros-experience')
         expect(data.embedCodes.inline).toBeUndefined()
         // oEmbed's url comes back null, and /p/1 is stripped to the root.
-        expect(data.url).toBe('https://view.ceros.com/ceros-qa/untitled-85')
+        expect(data.url).toBe('https://view.ceros.com/myaccount/studio-experience')
     })
 
     it('keys a scrollable Studio experience as scrollable, not fullHeight', async () => {
@@ -232,7 +232,7 @@ describe('ceros-api function — resolveExperience', () => {
             .mockRejectedValueOnce(new Error('network'))
             .mockResolvedValueOnce(jsonOk({
                 url: null, title: 'Fifth Brass Storm',
-                html: '<iframe src="https://ceros-qa.ceros.site/fifth-brass-storm"></iframe>', embedType: 'full-height',
+                html: '<iframe src="https://myaccount.ceros.site/flex-experience"></iframe>', embedType: 'full-height',
             }) as any)
 
         const result = await handler(makeEvent({ action: 'resolveExperience', url: FLEX_PAGE }), makeContext() as any)
@@ -254,7 +254,7 @@ describe('ceros-api function — resolveExperience', () => {
             .mockRejectedValueOnce(new Error('network'))
             .mockResolvedValueOnce(jsonOk({
                 url: null, title: 'Fifth Brass Storm',
-                html: '<iframe src="https://ceros-qa.ceros.site/fifth-brass-storm"></iframe>',
+                html: '<iframe src="https://myaccount.ceros.site/flex-experience"></iframe>',
             }) as any)
 
         const result = await handler(makeEvent({ action: 'resolveExperience', url: FLEX_PAGE }), makeContext() as any)
@@ -269,7 +269,7 @@ describe('ceros-api function — resolveExperience', () => {
             .mockResolvedValueOnce(headResponse({ 'x-flex-manifest': MANIFEST_URL }) as any)
             .mockResolvedValueOnce(jsonOk({
                 pageMetadata: { title: 'X' },
-                deliveryModes: { iframe: { snippet: '<iframe src="https://ceros-qa.ceros.site/x"></iframe>' } },
+                deliveryModes: { iframe: { snippet: '<iframe src="https://myaccount.ceros.site/x"></iframe>' } },
             }) as any)
 
         const result = await handler(makeEvent({ action: 'resolveExperience', url: FLEX_PAGE }), makeContext() as any)
@@ -348,7 +348,7 @@ describe('ceros-api function — resolveExperience', () => {
             .mockResolvedValueOnce(headResponse({ 'x-flex-manifest': 'https://evil.example.com/manifest.v1.json' }) as any)
             .mockResolvedValueOnce(jsonOk({
                 url: null, title: 'Fifth Brass Storm',
-                html: '<iframe src="https://ceros-qa.ceros.site/fifth-brass-storm"></iframe>', embedType: 'full-height',
+                html: '<iframe src="https://myaccount.ceros.site/flex-experience"></iframe>', embedType: 'full-height',
             }) as any)
 
         const result = await handler(makeEvent({ action: 'resolveExperience', url: FLEX_PAGE }), makeContext() as any)

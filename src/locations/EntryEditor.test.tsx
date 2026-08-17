@@ -145,9 +145,9 @@ describe('Entry — EmptyState paste flow', () => {
     const FLEX_MODEL = {
         isFlex: true,
         name: 'Fifth Brass Storm',
-        url: 'https://ceros-qa.ceros.site/fifth-brass-storm',
+        url: 'https://myaccount.ceros.site/flex-experience',
         embedCodes: {
-            fullHeight: '<iframe src="https://ceros-qa.ceros.site/fifth-brass-storm"></iframe>',
+            fullHeight: '<iframe src="https://myaccount.ceros.site/flex-experience"></iframe>',
             inline: '<div data-flex-inline></div>',
         },
     }
@@ -169,12 +169,12 @@ describe('Entry — EmptyState paste flow', () => {
     it('resolves a pasted URL through the function and shows the confirmation screen', async () => {
         mockCallCerosAction.mockResolvedValue({ data: FLEX_MODEL })
 
-        await pasteAndSubmit('https://ceros-qa.ceros.site/fifth-brass-storm')
+        await pasteAndSubmit('https://myaccount.ceros.site/flex-experience')
 
         await waitFor(() => expect(screen.getByText('Fifth Brass Storm')).toBeInTheDocument())
         expect(mockCallCerosAction).toHaveBeenCalledWith(expect.anything(), 'action-1', {
             action: 'resolveExperience',
-            url: 'https://ceros-qa.ceros.site/fifth-brass-storm',
+            url: 'https://myaccount.ceros.site/flex-experience',
         })
         // Both variants offered → a radio group, not confirm-only.
         expect(screen.getAllByRole('radio')).toHaveLength(2)
@@ -185,12 +185,12 @@ describe('Entry — EmptyState paste flow', () => {
             data: {
                 isFlex: false,
                 name: 'Untitled 85',
-                url: 'https://view.ceros.com/ceros-qa/untitled-85',
+                url: 'https://view.ceros.com/myaccount/studio-experience',
                 embedCodes: { fullHeight: '<div class="ceros-experience"></div>' },
             },
         })
 
-        await pasteAndSubmit('https://view.ceros.com/ceros-qa/untitled-85/p/1')
+        await pasteAndSubmit('https://view.ceros.com/myaccount/studio-experience/p/1')
 
         await waitFor(() => expect(screen.getByText('Untitled 85')).toBeInTheDocument())
         expect(screen.queryAllByRole('radio')).toHaveLength(0)
@@ -200,13 +200,13 @@ describe('Entry — EmptyState paste flow', () => {
 
         await waitFor(() => expect(sdk.entry.save).toHaveBeenCalled())
         expect(sdk.entry.fields.embedCode.setValue).toHaveBeenCalledWith('<div class="ceros-experience"></div>')
-        expect(sdk.entry.fields.url.setValue).toHaveBeenCalledWith('https://view.ceros.com/ceros-qa/untitled-85')
+        expect(sdk.entry.fields.url.setValue).toHaveBeenCalledWith('https://view.ceros.com/myaccount/studio-experience')
     })
 
     it('saves the inline snippet when the author picks the inline variant', async () => {
         mockCallCerosAction.mockResolvedValue({ data: FLEX_MODEL })
 
-        await pasteAndSubmit('https://ceros-qa.ceros.site/fifth-brass-storm')
+        await pasteAndSubmit('https://myaccount.ceros.site/flex-experience')
         await waitFor(() => expect(screen.getByText('Fifth Brass Storm')).toBeInTheDocument())
 
         fireEvent.click(screen.getByLabelText(/embed script/i))
@@ -220,7 +220,7 @@ describe('Entry — EmptyState paste flow', () => {
     it('shows the function error and does not touch the entry when resolution fails', async () => {
         mockCallCerosAction.mockResolvedValue({ error: 'The experience URL is invalid.' })
 
-        await pasteAndSubmit('https://ceros-qa.ceros.site/fifth-brass-storm')
+        await pasteAndSubmit('https://myaccount.ceros.site/flex-experience')
 
         await waitFor(() => expect(screen.getByText(/experience URL is invalid/i)).toBeInTheDocument())
         expect(sdk.entry.save).not.toHaveBeenCalled()
@@ -231,9 +231,9 @@ describe('Entry — EmptyState paste flow', () => {
         const SECOND_MODEL = {
             isFlex: true,
             name: 'Second Brass Storm',
-            url: 'https://ceros-qa.ceros.site/second-brass-storm',
+            url: 'https://myaccount.ceros.site/other-flex-experience',
             embedCodes: {
-                fullHeight: '<iframe src="https://ceros-qa.ceros.site/second-brass-storm"></iframe>',
+                fullHeight: '<iframe src="https://myaccount.ceros.site/other-flex-experience"></iframe>',
             },
         }
         mockCallCerosAction
@@ -241,7 +241,7 @@ describe('Entry — EmptyState paste flow', () => {
             .mockResolvedValueOnce({ data: SECOND_MODEL })
         sdk.entry.save.mockRejectedValueOnce(new Error('save failed'))
 
-        await pasteAndSubmit('https://ceros-qa.ceros.site/fifth-brass-storm')
+        await pasteAndSubmit('https://myaccount.ceros.site/flex-experience')
         await waitFor(() => expect(screen.getByText('Fifth Brass Storm')).toBeInTheDocument())
 
         fireEvent.click(screen.getByRole('button', { name: /^insert$/i }))
@@ -251,7 +251,7 @@ describe('Entry — EmptyState paste flow', () => {
         fireEvent.click(screen.getByRole('button', { name: /^back$/i }))
 
         const input = screen.getByPlaceholderText(/https:\/\/account\.ceros\.site\//i)
-        fireEvent.change(input, { target: { value: 'https://ceros-qa.ceros.site/second-brass-storm' } })
+        fireEvent.change(input, { target: { value: 'https://myaccount.ceros.site/other-flex-experience' } })
         fireEvent.submit(input.closest('form')!)
 
         await waitFor(() => expect(screen.getByText('Second Brass Storm')).toBeInTheDocument())
@@ -262,7 +262,7 @@ describe('Entry — EmptyState paste flow', () => {
         mockCallCerosAction.mockResolvedValue({ data: FLEX_MODEL })
         sdk.entry.save.mockRejectedValueOnce(new Error('save failed'))
 
-        await pasteAndSubmit('https://ceros-qa.ceros.site/fifth-brass-storm')
+        await pasteAndSubmit('https://myaccount.ceros.site/flex-experience')
         await waitFor(() => expect(screen.getByText('Fifth Brass Storm')).toBeInTheDocument())
 
         fireEvent.click(screen.getByRole('button', { name: /^insert$/i }))
@@ -273,7 +273,7 @@ describe('Entry — EmptyState paste flow', () => {
         // back to their prior (empty) values once the save rejected.
         expect(sdk.entry.fields.title.setValue).toHaveBeenCalledWith('Fifth Brass Storm')
         expect(sdk.entry.fields.title.setValue).toHaveBeenLastCalledWith('')
-        expect(sdk.entry.fields.url.setValue).toHaveBeenCalledWith('https://ceros-qa.ceros.site/fifth-brass-storm')
+        expect(sdk.entry.fields.url.setValue).toHaveBeenCalledWith('https://myaccount.ceros.site/flex-experience')
         expect(sdk.entry.fields.url.setValue).toHaveBeenLastCalledWith('')
         expect(sdk.entry.fields.embedCode.setValue).toHaveBeenCalledWith(FLEX_MODEL.embedCodes.fullHeight)
         expect(sdk.entry.fields.embedCode.setValue).toHaveBeenLastCalledWith('')
@@ -368,12 +368,12 @@ describe('Entry — LinkedState (experience linked)', () => {
 
 describe('Entry — LinkedState refresh and embed style', () => {
     const INLINE_SNIPPET = '<div data-flex-inline data-embed-height="auto"></div>'
-    const IFRAME_SNIPPET = '<iframe src="https://ceros-qa.ceros.site/fifth-brass-storm"></iframe>'
+    const IFRAME_SNIPPET = '<iframe src="https://myaccount.ceros.site/flex-experience"></iframe>'
 
     const RESOLVED = {
         isFlex: true,
         name: 'Fifth Brass Storm',
-        url: 'https://ceros-qa.ceros.site/fifth-brass-storm',
+        url: 'https://myaccount.ceros.site/flex-experience',
         embedCodes: { fullHeight: IFRAME_SNIPPET, inline: INLINE_SNIPPET },
     }
 
@@ -381,7 +381,7 @@ describe('Entry — LinkedState refresh and embed style', () => {
 
     const renderLinked = async (storedEmbedCode: string) => {
         sdk = makeLinkedSdk(storedEmbedCode)
-        sdk.entry.fields.url.getValue.mockReturnValue('https://ceros-qa.ceros.site/fifth-brass-storm')
+        sdk.entry.fields.url.getValue.mockReturnValue('https://myaccount.ceros.site/flex-experience')
         mockUseSDK.mockReturnValue(sdk as any)
         render(<Entry />)
         await screen.findByRole('button', { name: /refresh embed code/i })
@@ -453,7 +453,7 @@ describe('Entry — LinkedState refresh and embed style', () => {
 
     it('preselects Scrollable via Change embed style when the stored code is the scrollable snippet', async () => {
         const SCROLLABLE_SNIPPET =
-            '<iframe src="https://ceros-qa.ceros.site/fifth-brass-storm?scrollable=true"></iframe>'
+            '<iframe src="https://myaccount.ceros.site/flex-experience?scrollable=true"></iframe>'
         mockCallCerosAction.mockResolvedValue({
             data: { ...RESOLVED, embedCodes: { ...RESOLVED.embedCodes, scrollable: SCROLLABLE_SNIPPET } },
         })
@@ -472,7 +472,7 @@ describe('Entry — LinkedState refresh and embed style', () => {
         // exercises currentVariant's exact-match branch specifically — the
         // exact-match result must still win over any fallback preference.
         const SCROLLABLE_SNIPPET =
-            '<iframe src="https://ceros-qa.ceros.site/fifth-brass-storm?scrollable=true"></iframe>'
+            '<iframe src="https://myaccount.ceros.site/flex-experience?scrollable=true"></iframe>'
         mockCallCerosAction.mockResolvedValue({
             data: { ...RESOLVED, embedCodes: { ...RESOLVED.embedCodes, scrollable: SCROLLABLE_SNIPPET } },
         })
@@ -494,14 +494,14 @@ describe('Entry — LinkedState refresh and embed style', () => {
         // Refresh does any actual work, and the one the naive
         // "guess fullHeight, else throw" fallback broke.
         const OLD_SCROLLABLE_SNIPPET =
-            '<div class="ceros-experience">https://view.ceros.com/ceros-qa/scrollable-one</div>'
+            '<div class="ceros-experience">https://view.ceros.com/myaccount/scrollable-experience</div>'
         const NEW_SCROLLABLE_SNIPPET =
-            '<div class="ceros-experience" data-refreshed="true">https://view.ceros.com/ceros-qa/scrollable-one</div>'
+            '<div class="ceros-experience" data-refreshed="true">https://view.ceros.com/myaccount/scrollable-experience</div>'
         mockCallCerosAction.mockResolvedValue({
             data: {
                 isFlex: false,
                 name: 'Scrollable One',
-                url: 'https://view.ceros.com/ceros-qa/scrollable-one',
+                url: 'https://view.ceros.com/myaccount/scrollable-experience',
                 embedCodes: { scrollable: NEW_SCROLLABLE_SNIPPET },
             },
         })
@@ -527,7 +527,7 @@ describe('Entry — LinkedState refresh and embed style', () => {
             data: {
                 isFlex: true,
                 name: 'Fifth Brass Storm',
-                url: 'https://ceros-qa.ceros.site/fifth-brass-storm',
+                url: 'https://myaccount.ceros.site/flex-experience',
                 embedCodes: { fullHeight: IFRAME_SNIPPET },
                 inlineUnavailable: true,
             },
@@ -617,17 +617,17 @@ describe('Entry — EmptyState trims the pasted URL', () => {
         mockCallCerosAction.mockResolvedValue({
             data: {
                 isFlex: true, name: 'Fifth Brass Storm',
-                url: 'https://ceros-qa.ceros.site/fifth-brass-storm',
+                url: 'https://myaccount.ceros.site/flex-experience',
                 embedCodes: { fullHeight: '<iframe></iframe>' },
             },
         })
 
-        await pasteAndSubmit('  https://ceros-qa.ceros.site/fifth-brass-storm\n')
+        await pasteAndSubmit('  https://myaccount.ceros.site/flex-experience\n')
 
         await waitFor(() => expect(mockCallCerosAction).toHaveBeenCalled())
         expect(mockCallCerosAction).toHaveBeenCalledWith(expect.anything(), 'action-1', {
             action: 'resolveExperience',
-            url: 'https://ceros-qa.ceros.site/fifth-brass-storm',
+            url: 'https://myaccount.ceros.site/flex-experience',
         })
     })
 
