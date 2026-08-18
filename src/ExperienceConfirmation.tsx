@@ -2,6 +2,8 @@ import { Box, Button, Flex, Note, Paragraph } from '@contentful/f36-components'
 import tokens from '@contentful/f36-tokens'
 import React, { useEffect, useState } from 'react'
 
+import { EmbedPreview } from './EmbedPreview'
+
 export type EmbedVariant = 'fullHeight' | 'scrollable' | 'inline'
 
 export interface ConfirmationModel {
@@ -170,6 +172,7 @@ export function ExperienceConfirmation({
 
             {selectedCode && (
                 <Box marginTop="spacingL">
+                    <EmbedPreview embedCode={selectedCode} />
                 </Box>
             )}
         </Box>
