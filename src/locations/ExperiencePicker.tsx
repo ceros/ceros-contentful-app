@@ -5,6 +5,8 @@ import { css, cx, keyframes } from 'emotion'
 import React, { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 
+import { callCerosAction, findCerosActionId } from '../ceros-action'
+
 export interface SelectedExperience {
     name: string
     url: string
@@ -428,31 +430,14 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
     const [error, setError] = useState<string | null>(null)
     const [expError, setExpError] = useState<string | null>(null)
 
-    const callFunction = async (actionId: string, params: Record<string, unknown>) => {
-        const call = await sdk.cma.appActionCall.createWithResult(
-            {
-                spaceId: sdk.ids.space,
-                environmentId: sdk.ids.environment,
-                appDefinitionId: sdk.ids.app || '',
-                appActionId: actionId,
-            },
-            { parameters: params }
-        )
-        if (call.sys.status === 'failed') {
-            const err = (call.sys as any).error
-            throw new Error(`Function call failed: ${err?.message ?? JSON.stringify(err)}`)
-        }
-        return (call.sys as any).result as Record<string, unknown>
-    }
-
     const prefetchFolder = (folder: FolderNode, actionId: string): Promise<void> => {
         setExperienceCache(prev => ({ ...prev, [folder.resourceId]: { status: 'loading' } }))
-        return callFunction(actionId, { action: 'getFolderExperiences', folderId: folder.resourceId })
-            .then(data => {
-                if (data.error) throw new Error(String(data.error))
+        return callCerosAction(sdk, actionId, { action: 'getFolderExperiences', folderId: folder.resourceId })
+            .then(result => {
+                if (result.error) throw new Error(result.error)
                 setExperienceCache(prev => ({
                     ...prev,
-                    [folder.resourceId]: { status: 'ready', experiences: (data.experiences as ExperienceNode[]) ?? [] },
+                    [folder.resourceId]: { status: 'ready', experiences: (result.data as ExperienceNode[]) ?? [] },
                 }))
             })
             .catch(() => {
@@ -489,20 +474,11 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
         setError(null)
         ;(async () => {
             try {
-                const actionsResponse = await sdk.cma.appAction.getMany({
-                    organizationId: sdk.ids.organization,
-                    appDefinitionId: sdk.ids.app || '',
-                })
-                const cerosAction = actionsResponse.items.find((a) => a.name === 'CerosApi')
-                if (!cerosAction) {
-                    setError('The CerosApi App Action is not set up. Run "npm run create-app-action" after deploying.')
-                    return
-                }
-                const actionId = cerosAction.sys.id
+                const actionId = await findCerosActionId(sdk)
                 setAppActionId(actionId)
-                const data = await callFunction(actionId, { action: 'getFolderTree' })
-                if (data.error) throw new Error(String(data.error))
-                const loadedFolders = (data.folders as FolderNode[]) ?? []
+                const result = await callCerosAction(sdk, actionId, { action: 'getFolderTree' })
+                if (result.error) throw new Error(result.error)
+                const loadedFolders = (result.data as FolderNode[]) ?? []
                 setFolders(loadedFolders)
                 prefetchWithConcurrency(flattenFolders(loadedFolders), actionId) // background, non-blocking
             } catch (err) {
@@ -546,15 +522,15 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
         setLoadingExpId(exp.resourceId)
         setExpError(null)
         try {
-            const data = await callFunction(appActionId, {
+            const result = await callCerosAction(sdk, appActionId, {
                 action: 'getEmbedCode',
                 resourceId: exp.resourceId,
             })
-            if (data.error) throw new Error(String(data.error))
+            if (result.error) throw new Error(result.error)
             onSelect({
                 name: exp.name,
-                url: String(data.url ?? ''),
-                embedCode: String(data.embedCode ?? ''),
+                url: String(result.data?.url ?? ''),
+                embedCode: String(result.data?.embedCode ?? ''),
             })
         } catch (err) {
             console.error('[CerosApi] getEmbedCode error:', err)
