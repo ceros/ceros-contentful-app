@@ -1,22 +1,30 @@
 import { vi, describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import React from 'react'
-import { OembedMetadata } from '../oembed'
 
 vi.mock('@contentful/react-apps-toolkit', () => ({
     useSDK: vi.fn(),
 }))
 
-vi.mock('../oembed', () => ({
+vi.mock('../oembed', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('../oembed')>()),
     getExperienceMetadata: vi.fn(),
 }))
 
+vi.mock('../ceros-action', () => ({
+    findCerosActionId: vi.fn(),
+    callCerosAction: vi.fn(),
+}))
+
 import { useSDK } from '@contentful/react-apps-toolkit'
+import { callCerosAction, findCerosActionId } from '../ceros-action'
 import { getExperienceMetadata } from '../oembed'
 import Entry from './EntryEditor'
 
-const mockGetExperienceMetadata = vi.mocked(getExperienceMetadata)
 const mockUseSDK = vi.mocked(useSDK)
+const mockGetExperienceMetadata = vi.mocked(getExperienceMetadata)
+const mockFindCerosActionId = vi.mocked(findCerosActionId)
+const mockCallCerosAction = vi.mocked(callCerosAction)
 
 const baseParameters = {
     contentTypeId: 'cerosExperience',
@@ -120,9 +128,7 @@ describe('Entry — EmptyState (no linked experience)', () => {
         })
     })
 
-    it('shows a validation error when getExperienceMetadata returns null', async () => {
-        mockGetExperienceMetadata.mockResolvedValue(null)
-
+    it('shows a validation error when the pasted URL is not a recognized Ceros host', async () => {
         render(<Entry />)
 
         const input = await screen.findByPlaceholderText(/https:\/\/account\.ceros\.site\//i)
@@ -133,80 +139,156 @@ describe('Entry — EmptyState (no linked experience)', () => {
             expect(screen.getByText(/The experience URL is invalid/i)).toBeInTheDocument()
         })
     })
+})
 
-    it('calls getExperienceMetadata with the entered URL on submit', async () => {
-        mockGetExperienceMetadata.mockResolvedValue(null)
+describe('Entry — EmptyState paste flow', () => {
+    let sdk: ReturnType<typeof makeMockSdk>
 
-        render(<Entry />)
+    const FLEX_MODEL = {
+        isFlex: true,
+        name: 'Fifth Brass Storm',
+        url: 'https://myaccount.ceros.site/flex-experience',
+        embedCodes: {
+            fullHeight: '<iframe src="https://myaccount.ceros.site/flex-experience"></iframe>',
+            inline: '<div data-flex-inline></div>',
+        },
+    }
 
-        const input = await screen.findByPlaceholderText(/https:\/\/account\.ceros\.site\//i)
-        fireEvent.change(input, { target: { value: 'https://view.ceros.com/account/experience' } })
-        fireEvent.submit(input.closest('form')!)
-
-        await waitFor(() => {
-            expect(mockGetExperienceMetadata).toHaveBeenCalledWith('https://view.ceros.com/account/experience')
-        })
+    beforeEach(() => {
+        vi.clearAllMocks()
+        sdk = makeMockSdk()
+        mockUseSDK.mockReturnValue(sdk as any)
+        mockFindCerosActionId.mockResolvedValue('action-1')
     })
 
-    it('saves title, url, and embed code to entry fields on successful metadata fetch', async () => {
-        const sdk = makeMockSdk()
-        mockUseSDK.mockReturnValue(sdk as any)
+    const pasteAndSubmit = async (url: string) => {
+        render(<Entry />)
+        const input = await screen.findByPlaceholderText(/https:\/\/account\.ceros\.site\//i)
+        fireEvent.change(input, { target: { value: url } })
+        fireEvent.submit(input.closest('form')!)
+    }
 
-        const mockMetadata: OembedMetadata = {
-            type: 'rich',
-            url: 'https://view.ceros.com/account/experience',
-            title: 'My Experience',
-            html: CEROS_EMBED_CODE,
-            width: 800,
-            height: 600,
-            provider_name: 'Ceros',
-            provider_url: 'https://ceros.com',
-            version: '1.0',
-            embedType: 'full-height',
+    it('resolves a pasted URL through the function and shows the confirmation screen', async () => {
+        mockCallCerosAction.mockResolvedValue({ data: FLEX_MODEL })
+
+        await pasteAndSubmit('https://myaccount.ceros.site/flex-experience')
+
+        await waitFor(() => expect(screen.getByText('Fifth Brass Storm')).toBeInTheDocument())
+        expect(mockCallCerosAction).toHaveBeenCalledWith(expect.anything(), 'action-1', {
+            action: 'resolveExperience',
+            url: 'https://myaccount.ceros.site/flex-experience',
+        })
+        // Both variants offered → a radio group, not confirm-only.
+        expect(screen.getAllByRole('radio')).toHaveLength(2)
+    })
+
+    it('renders confirm-only for a Studio paste and does not save until confirmed', async () => {
+        mockCallCerosAction.mockResolvedValue({
+            data: {
+                isFlex: false,
+                name: 'Untitled 85',
+                url: 'https://view.ceros.com/myaccount/studio-experience',
+                embedCodes: { fullHeight: '<div class="ceros-experience"></div>' },
+            },
+        })
+
+        await pasteAndSubmit('https://view.ceros.com/myaccount/studio-experience/p/1')
+
+        await waitFor(() => expect(screen.getByText('Untitled 85')).toBeInTheDocument())
+        expect(screen.queryAllByRole('radio')).toHaveLength(0)
+        expect(sdk.entry.save).not.toHaveBeenCalled()
+
+        fireEvent.click(screen.getByRole('button', { name: /^insert$/i }))
+
+        await waitFor(() => expect(sdk.entry.save).toHaveBeenCalled())
+        expect(sdk.entry.fields.embedCode.setValue).toHaveBeenCalledWith('<div class="ceros-experience"></div>')
+        expect(sdk.entry.fields.url.setValue).toHaveBeenCalledWith('https://view.ceros.com/myaccount/studio-experience')
+    })
+
+    it('saves the inline snippet when the author picks the inline variant', async () => {
+        mockCallCerosAction.mockResolvedValue({ data: FLEX_MODEL })
+
+        await pasteAndSubmit('https://myaccount.ceros.site/flex-experience')
+        await waitFor(() => expect(screen.getByText('Fifth Brass Storm')).toBeInTheDocument())
+
+        fireEvent.click(screen.getByLabelText(/embed script/i))
+        fireEvent.click(screen.getByRole('button', { name: /^insert$/i }))
+
+        await waitFor(() =>
+            expect(sdk.entry.fields.embedCode.setValue).toHaveBeenCalledWith('<div data-flex-inline></div>')
+        )
+    })
+
+    it('shows the function error and does not touch the entry when resolution fails', async () => {
+        mockCallCerosAction.mockResolvedValue({ error: 'The experience URL is invalid.' })
+
+        await pasteAndSubmit('https://myaccount.ceros.site/flex-experience')
+
+        await waitFor(() => expect(screen.getByText(/experience URL is invalid/i)).toBeInTheDocument())
+        expect(sdk.entry.save).not.toHaveBeenCalled()
+        expect(sdk.entry.fields.embedCode.setValue).not.toHaveBeenCalled()
+    })
+
+    it('clears a stale save error when a fresh URL resolves', async () => {
+        const SECOND_MODEL = {
+            isFlex: true,
+            name: 'Second Brass Storm',
+            url: 'https://myaccount.ceros.site/other-flex-experience',
+            embedCodes: {
+                fullHeight: '<iframe src="https://myaccount.ceros.site/other-flex-experience"></iframe>',
+            },
         }
-        mockGetExperienceMetadata.mockResolvedValue(mockMetadata)
+        mockCallCerosAction
+            .mockResolvedValueOnce({ data: FLEX_MODEL })
+            .mockResolvedValueOnce({ data: SECOND_MODEL })
+        sdk.entry.save.mockRejectedValueOnce(new Error('save failed'))
 
-        render(<Entry />)
+        await pasteAndSubmit('https://myaccount.ceros.site/flex-experience')
+        await waitFor(() => expect(screen.getByText('Fifth Brass Storm')).toBeInTheDocument())
 
-        const input = await screen.findByPlaceholderText(/https:\/\/account\.ceros\.site\//i)
-        fireEvent.change(input, { target: { value: 'https://view.ceros.com/account/experience' } })
+        fireEvent.click(screen.getByRole('button', { name: /^insert$/i }))
+
+        await waitFor(() => expect(screen.getByText(/couldn't save this entry/i)).toBeInTheDocument())
+
+        fireEvent.click(screen.getByRole('button', { name: /^back$/i }))
+
+        const input = screen.getByPlaceholderText(/https:\/\/account\.ceros\.site\//i)
+        fireEvent.change(input, { target: { value: 'https://myaccount.ceros.site/other-flex-experience' } })
         fireEvent.submit(input.closest('form')!)
 
-        await waitFor(() => {
-            expect(sdk.entry.fields.title.setValue).toHaveBeenCalledWith('My Experience')
-            expect(sdk.entry.fields.url.setValue).toHaveBeenCalledWith(
-                'https://view.ceros.com/account/experience'
-            )
-            expect(sdk.entry.fields.embedCode.setValue).toHaveBeenCalledWith(CEROS_EMBED_CODE)
-        })
+        await waitFor(() => expect(screen.getByText('Second Brass Storm')).toBeInTheDocument())
+        expect(screen.queryByText(/couldn't save this entry/i)).not.toBeInTheDocument()
     })
 
-    it('calls entry.save() after setting field values', async () => {
-        const sdk = makeMockSdk()
-        mockUseSDK.mockReturnValue(sdk as any)
+    it('restores all three fields and stays unlinked when a paste save fails', async () => {
+        mockCallCerosAction.mockResolvedValue({ data: FLEX_MODEL })
+        sdk.entry.save.mockRejectedValueOnce(new Error('save failed'))
 
-        mockGetExperienceMetadata.mockResolvedValue({
-            type: 'rich',
-            url: 'https://view.ceros.com/account/experience',
-            title: 'Test',
-            html: CEROS_EMBED_CODE,
-            width: 800,
-            height: 600,
-            provider_name: 'Ceros',
-            provider_url: 'https://ceros.com',
-            version: '1.0',
-            embedType: 'full-height',
-        })
+        await pasteAndSubmit('https://myaccount.ceros.site/flex-experience')
+        await waitFor(() => expect(screen.getByText('Fifth Brass Storm')).toBeInTheDocument())
 
-        render(<Entry />)
+        fireEvent.click(screen.getByRole('button', { name: /^insert$/i }))
 
-        const input = await screen.findByPlaceholderText(/https:\/\/account\.ceros\.site\//i)
-        fireEvent.change(input, { target: { value: 'https://view.ceros.com/account/experience' } })
-        fireEvent.submit(input.closest('form')!)
+        await waitFor(() => expect(screen.getByText(/couldn't save this entry/i)).toBeInTheDocument())
 
-        await waitFor(() => {
-            expect(sdk.entry.save).toHaveBeenCalled()
-        })
+        // All three fields were written with the chosen experience, then rolled
+        // back to their prior (empty) values once the save rejected.
+        expect(sdk.entry.fields.title.setValue).toHaveBeenCalledWith('Fifth Brass Storm')
+        expect(sdk.entry.fields.title.setValue).toHaveBeenLastCalledWith('')
+        expect(sdk.entry.fields.url.setValue).toHaveBeenCalledWith('https://myaccount.ceros.site/flex-experience')
+        expect(sdk.entry.fields.url.setValue).toHaveBeenLastCalledWith('')
+        expect(sdk.entry.fields.embedCode.setValue).toHaveBeenCalledWith(FLEX_MODEL.embedCodes.fullHeight)
+        expect(sdk.entry.fields.embedCode.setValue).toHaveBeenLastCalledWith('')
+
+        // Never flipped to the linked view for a write that was never persisted.
+        expect(screen.getByText('Fifth Brass Storm')).toBeInTheDocument()
+    })
+
+    it('rejects a non-Ceros host before calling the function', async () => {
+        await pasteAndSubmit('https://example.com/not-ceros')
+
+        await waitFor(() => expect(screen.getByText(/experience URL is invalid/i)).toBeInTheDocument())
+        expect(mockCallCerosAction).not.toHaveBeenCalled()
     })
 })
 
@@ -329,5 +411,49 @@ describe('Entry — LinkedState (experience linked)', () => {
         await waitFor(() => {
             expect(sdk.entry.fields.embedCode.setValue).toHaveBeenCalledWith(freshEmbed)
         })
+    })
+})
+
+
+describe('Entry — EmptyState trims the pasted URL', () => {
+    let sdk: ReturnType<typeof makeMockSdk>
+
+    beforeEach(() => {
+        vi.clearAllMocks()
+        sdk = makeMockSdk()
+        mockUseSDK.mockReturnValue(sdk as any)
+        mockFindCerosActionId.mockResolvedValue('action-1')
+    })
+
+    const pasteAndSubmit = async (url: string) => {
+        render(<Entry />)
+        const input = await screen.findByPlaceholderText(/https:\/\/account\.ceros\.site\//i)
+        fireEvent.change(input, { target: { value: url } })
+        fireEvent.submit(input.closest('form')!)
+    }
+
+    it('sends a trimmed URL to the function', async () => {
+        mockCallCerosAction.mockResolvedValue({
+            data: {
+                isFlex: true, name: 'Fifth Brass Storm',
+                url: 'https://myaccount.ceros.site/flex-experience',
+                embedCodes: { fullHeight: '<iframe></iframe>' },
+            },
+        })
+
+        await pasteAndSubmit('  https://myaccount.ceros.site/flex-experience\n')
+
+        await waitFor(() => expect(mockCallCerosAction).toHaveBeenCalled())
+        expect(mockCallCerosAction).toHaveBeenCalledWith(expect.anything(), 'action-1', {
+            action: 'resolveExperience',
+            url: 'https://myaccount.ceros.site/flex-experience',
+        })
+    })
+
+    it('rejects a whitespace-only paste without calling the function', async () => {
+        await pasteAndSubmit('   ')
+
+        await waitFor(() => expect(screen.getByText(/experience URL is invalid/i)).toBeInTheDocument())
+        expect(mockCallCerosAction).not.toHaveBeenCalled()
     })
 })

@@ -5,6 +5,7 @@ import { css, cx, keyframes } from 'emotion'
 import React, { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { callCerosAction, findCerosActionId, Paging } from '../ceros-action'
+import { ConfirmationModel, EmbedVariant, ExperienceConfirmation } from '../ExperienceConfirmation'
 
 export interface SelectedExperience {
     name: string
@@ -454,6 +455,7 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
     const [sort, setSort] = useState('last_created')
     // null = show all; 'flex' or 'studio' = only that type (client-side, loaded items only)
     const [typeFilter, setTypeFilter] = useState<null | 'flex' | 'studio'>(null)
+    const [confirming, setConfirming] = useState<ConfirmationModel | null>(null)
 
     const callFunction = (actionId: string, params: Record<string, unknown>) =>
         callCerosAction(sdk, actionId, params)
@@ -519,6 +521,7 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
             setExpError(null)
             setLoadingExpId(null)
             setAppActionId(null)
+            setConfirming(null)
             return
         }
 
@@ -605,19 +608,41 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
         try {
             const res = await callFunction(appActionId, { action: 'getEmbedCode', resourceId: exp.resourceId })
             if (res.error) throw new Error(String(res.error))
-            const d = (res.data as { embedCode?: string; url?: string }) ?? {}
-            onSelect({
+            const d = (res.data as {
+                fullHeightEmbedCode?: string
+                scrollableEmbedCode?: string
+                inlineEmbedCode?: string
+                url?: string
+                title?: string
+            }) ?? {}
+
+            const embedCodes: Partial<Record<EmbedVariant, string>> = {}
+            if (d.fullHeightEmbedCode) embedCodes.fullHeight = d.fullHeightEmbedCode
+            if (d.scrollableEmbedCode) embedCodes.scrollable = d.scrollableEmbedCode
+            if (d.inlineEmbedCode) embedCodes.inline = d.inlineEmbedCode
+
+            setConfirming({
+                // The list item's name is what the author just clicked on; prefer
+                // it over the API title so the screen matches the card.
                 name: exp.name,
                 url: String(d.url ?? ''),
-                embedCode: String(d.embedCode ?? ''),
+                thumbnailUrl: exp.thumbnailUrl,
+                isFlex: exp.isFlexExperience,
+                embedCodes,
             })
+            setLoadingExpId(null)
         } catch (err) {
             console.error('[CerosApi] getEmbedCode error:', err)
             setExpError(err instanceof Error ? err.message : String(err))
-        } finally {
             setLoadingExpId(null)
         }
     }
+
+    const handleInsert = (embedCode: string) => {
+        if (!confirming) return
+        onSelect({ name: confirming.name, url: confirming.url, embedCode })
+    }
+    const handleBackToBrowse = () => setConfirming(null)
 
     const childrenOf = (folder: FolderNode): FolderNode[] =>
         folder.children.length > 0 ? folder.children : folderChildren[folder.resourceId] ?? []
@@ -767,50 +792,65 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
 
                 {/* Scrollable body */}
                 <div style={s.scrollArea}>
-                        {/* Breadcrumb */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 20, flexWrap: 'wrap' }}>
-                            {isInFolder && (
-                                <button
-                                    type="button"
-                                    className={cx(iconBtnClass, css`width: 24px; height: 24px; border-radius: 4px; margin-left: -4px;`)}
-                                    onClick={handleBack}
-                                    aria-label="Back"
-                                >
-                                    <BackIcon />
-                                </button>
-                            )}
-                            {isInFolder ? (
-                                <button type="button" className={crumbBtnClass} onClick={() => handleNavigateTo(0)}>
-                                    All folders
-                                </button>
-                            ) : (
-                                <span style={s.crumbCurrent}>All folders</span>
-                            )}
-                            {folderStack.map((folder, i) => (
-                                <React.Fragment key={folder.resourceId}>
-                                    <span style={{ color: '#979A9B', display: 'flex', alignItems: 'center' }}>
-                                        <ChevronRightIcon />
-                                    </span>
-                                    {i < folderStack.length - 1 ? (
-                                        <button type="button" className={crumbBtnClass} onClick={() => handleNavigateTo(i + 1)}>
-                                            {folder.name}
-                                        </button>
-                                    ) : (
-                                        <span style={s.crumbCurrent}>{folder.name}</span>
-                                    )}
-                                </React.Fragment>
-                            ))}
-                            {isInFolder && (
-                                <input
-                                    type="text"
-                                    value={searchTerm}
-                                    placeholder={`Search in ${currentFolder?.name ?? 'folder'}`}
-                                    onChange={(e) => setSearchTerm(e.target.value)}
-                                    style={{ marginLeft: 'auto', padding: '6px 10px', border: '1px solid #DCDFE1', borderRadius: 6, font: 'inherit', fontSize: 14 }}
-                                />
-                            )}
+                    {confirming ? (
+                        <div>
+                            <button type="button" className={crumbBtnClass} onClick={handleBackToBrowse} style={{ marginBottom: 20 }}>
+                                ‹ Back to browsing
+                            </button>
+                            <ExperienceConfirmation
+                                model={confirming}
+                                onInsert={handleInsert}
+                                onBack={handleBackToBrowse}
+                            />
                         </div>
-                        {bodyContent()}
+                    ) : (
+                        <>
+                            {/* Breadcrumb */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 20, flexWrap: 'wrap' }}>
+                                {isInFolder && (
+                                    <button
+                                        type="button"
+                                        className={cx(iconBtnClass, css`width: 24px; height: 24px; border-radius: 4px; margin-left: -4px;`)}
+                                        onClick={handleBack}
+                                        aria-label="Back"
+                                    >
+                                        <BackIcon />
+                                    </button>
+                                )}
+                                {isInFolder ? (
+                                    <button type="button" className={crumbBtnClass} onClick={() => handleNavigateTo(0)}>
+                                        All folders
+                                    </button>
+                                ) : (
+                                    <span style={s.crumbCurrent}>All folders</span>
+                                )}
+                                {folderStack.map((folder, i) => (
+                                    <React.Fragment key={folder.resourceId}>
+                                        <span style={{ color: '#979A9B', display: 'flex', alignItems: 'center' }}>
+                                            <ChevronRightIcon />
+                                        </span>
+                                        {i < folderStack.length - 1 ? (
+                                            <button type="button" className={crumbBtnClass} onClick={() => handleNavigateTo(i + 1)}>
+                                                {folder.name}
+                                            </button>
+                                        ) : (
+                                            <span style={s.crumbCurrent}>{folder.name}</span>
+                                        )}
+                                    </React.Fragment>
+                                ))}
+                                {isInFolder && (
+                                    <input
+                                        type="text"
+                                        value={searchTerm}
+                                        placeholder={`Search in ${currentFolder?.name ?? 'folder'}`}
+                                        onChange={(e) => setSearchTerm(e.target.value)}
+                                        style={{ marginLeft: 'auto', padding: '6px 10px', border: '1px solid #DCDFE1', borderRadius: 6, font: 'inherit', fontSize: 14 }}
+                                    />
+                                )}
+                            </div>
+                            {bodyContent()}
+                        </>
+                    )}
                 </div>
 
             </div>
