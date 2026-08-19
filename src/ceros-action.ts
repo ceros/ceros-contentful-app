@@ -9,9 +9,22 @@ export interface Paging {
     previous?: string
 }
 
+// Returned by getFolderExperiences alongside the swept block. `total` is the
+// folder's true published count, so a partial view can say so honestly.
+export interface SweepMeta {
+    total: number
+    scanned: number
+    returned: number
+    droppedByStatus: number
+    droppedByFlags: number
+    hasMore: boolean
+    nextStartPage: number | null
+}
+
 export interface CerosActionResult {
     data?: any
     paging?: Paging
+    meta?: SweepMeta
     error?: string
 }
 

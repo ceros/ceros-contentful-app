@@ -1,10 +1,10 @@
 import { EditorAppSDK } from '@contentful/app-sdk'
-import { Note, Pagination } from '@contentful/f36-components'
+import { Note } from '@contentful/f36-components'
 import { useSDK } from '@contentful/react-apps-toolkit'
 import { css, cx, keyframes } from 'emotion'
 import React, { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { callCerosAction, findCerosActionId, Paging } from '../ceros-action'
+import { callCerosAction, findCerosActionId, SweepMeta } from '../ceros-action'
 import { ConfirmationModel, EmbedVariant, ExperienceConfirmation } from '../ExperienceConfirmation'
 
 export interface SelectedExperience {
@@ -374,7 +374,7 @@ function ExperienceCard({
         >
             <div style={s.cardThumb}>
                 {exp.thumbnailUrl ? (
-                    <img src={exp.thumbnailUrl} alt="" style={s.cardThumbImg} />
+                    <img src={exp.thumbnailUrl} alt="" loading="lazy" style={s.cardThumbImg} />
                 ) : (
                     <div style={{ width: '100%', height: '100%', background: '#E9EBEC' }} />
                 )}
@@ -439,7 +439,7 @@ export interface ExperiencePickerProps {
 
 type FolderCacheEntry =
     | { status: 'loading' }
-    | { status: 'ready'; experiences: ExperienceNode[]; paging: Paging | null; page: number }
+    | { status: 'ready'; experiences: ExperienceNode[]; meta: SweepMeta | null }
     | { status: 'error' }
 
 // Subfolders are fetched lazily per folder, so they need the same three states
@@ -465,15 +465,19 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
     const [searchTerm, setSearchTerm] = useState('')
     const [debouncedSearch, setDebouncedSearch] = useState('')
     const [sort, setSort] = useState('last_created')
-    // null = show all; 'flex' or 'studio' = only that type (client-side, loaded items only)
+    // null = show all; 'flex' or 'studio' = only that type. Filtering client-side
+    // is correct here because the function returns the folder's complete
+    // published set (a block at a time), so there is no server pager to
+    // contradict — and toggling costs no request.
     const [typeFilter, setTypeFilter] = useState<null | 'flex' | 'studio'>(null)
+    const [loadingMore, setLoadingMore] = useState(false)
     const [confirming, setConfirming] = useState<ConfirmationModel | null>(null)
 
     const callFunction = (actionId: string, params: Record<string, unknown>) =>
         callCerosAction(sdk, actionId, params)
 
     // Single source of truth for the current folder's list query (sort +
-    // search). Both the fetch effect and pagination read it, so they stay
+    // search). Both the initial sweep and "Load more" read it, so they stay
     // in sync with the active Sort/Search controls.
     // Reads the *debounced* term, not the raw input: the fetch effect below is
     // keyed on debouncedSearch, so building the query from searchTerm would let
@@ -484,27 +488,52 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
         ...(debouncedSearch ? { search: debouncedSearch } : {}),
     })
 
-    const fetchFolderPage = (folder: FolderNode, actionId: string, page = 1, extraQuery: Record<string, unknown> = {}) => {
-        setExperienceCache((prev) => ({ ...prev, [folder.resourceId]: { status: 'loading' } }))
+    // Sweeps one block of a folder's published experiences. startPage 1 replaces
+    // the folder's list; a later startPage appends to it.
+    const sweepFolder = (
+        folder: FolderNode,
+        actionId: string,
+        startPage = 1,
+        extraQuery: Record<string, unknown> = {}
+    ) => {
+        const append = startPage > 1
+        // Appending must not flip the folder to 'loading' — that would blank the
+        // grid the author is mid-scroll through.
+        if (append) setLoadingMore(true)
+        else setExperienceCache((prev) => ({ ...prev, [folder.resourceId]: { status: 'loading' } }))
+
         return callFunction(actionId, {
             action: 'getFolderExperiences',
             folderId: folder.resourceId,
-            query: JSON.stringify({ page, ...extraQuery }),
+            query: JSON.stringify({ startPage, ...extraQuery }),
         })
             .then((res) => {
                 if (res.error) throw new Error(String(res.error))
-                setExperienceCache((prev) => ({
-                    ...prev,
-                    [folder.resourceId]: {
-                        status: 'ready',
-                        experiences: (res.data as ExperienceNode[]) ?? [],
-                        paging: res.paging ?? null,
-                        page,
-                    },
-                }))
+                const block = (res.data as ExperienceNode[]) ?? []
+                const meta = (res.meta as SweepMeta) ?? null
+                setExperienceCache((prev) => {
+                    const existing = prev[folder.resourceId]
+                    const before =
+                        append && existing?.status === 'ready' ? existing.experiences : []
+                    return {
+                        ...prev,
+                        [folder.resourceId]: {
+                            status: 'ready',
+                            experiences: [...before, ...block],
+                            meta,
+                        },
+                    }
+                })
             })
             .catch(() => {
-                setExperienceCache((prev) => ({ ...prev, [folder.resourceId]: { status: 'error' } }))
+                // A failed "Load more" keeps what is already on screen; only the
+                // initial sweep can put the folder into an error state.
+                if (!append) {
+                    setExperienceCache((prev) => ({ ...prev, [folder.resourceId]: { status: 'error' } }))
+                }
+            })
+            .finally(() => {
+                if (append) setLoadingMore(false)
             })
     }
 
@@ -600,7 +629,7 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
     useEffect(() => {
         const folder = folderStack[folderStack.length - 1]
         if (!folder || !appActionId) return
-        fetchFolderPage(folder, appActionId, 1, buildExperienceQuery())
+        sweepFolder(folder, appActionId, 1, buildExperienceQuery())
     }, [folderStack, sort, debouncedSearch, appActionId]) // eslint-disable-line react-hooks/exhaustive-deps
 
     const handleFolderOpen = (folder: FolderNode) => {
@@ -782,20 +811,37 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
                                 </div>
                             ) : (
                                 <Note variant="neutral">
-                                    No {typeFilter === 'flex' ? 'Flex' : 'Studio'} experiences on this page. Try another page or clear the filter.
+                                    {cacheEntry.meta?.hasMore
+                                        ? `No ${typeFilter === 'flex' ? 'Flex' : 'Studio'} experiences in the first ${cacheEntry.experiences.length.toLocaleString()} loaded. Load more to keep looking.`
+                                        : `No ${typeFilter === 'flex' ? 'Flex' : 'Studio'} experiences in this folder.`}
                                 </Note>
                             )}
                         </section>
                     )}
-                    {cacheEntry?.status === 'ready' && cacheEntry.paging && cacheEntry.paging.pages > 1 && currentFolder && (
-                        <Pagination
-                            activePage={cacheEntry.page - 1}
-                            itemsPerPage={cacheEntry.paging.pageSize}
-                            totalItems={cacheEntry.paging.total}
-                            isLastPage={!cacheEntry.paging.next}
-                            pageLength={cacheEntry.experiences.length}
-                            onPageChange={(p) => appActionId && fetchFolderPage(currentFolder, appActionId, p + 1, buildExperienceQuery())}
-                        />
+                    {cacheEntry?.status === 'ready' && cacheEntry.meta?.hasMore && currentFolder && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '4px 0 8px' }}>
+                            <button
+                                type="button"
+                                className={crumbBtnClass}
+                                disabled={loadingMore}
+                                onClick={() =>
+                                    appActionId &&
+                                    cacheEntry.meta?.nextStartPage &&
+                                    sweepFolder(
+                                        currentFolder,
+                                        appActionId,
+                                        cacheEntry.meta.nextStartPage,
+                                        buildExperienceQuery()
+                                    )
+                                }
+                            >
+                                {loadingMore ? 'Loading…' : 'Load more'}
+                            </button>
+                            <span style={{ fontSize: 13, color: '#67728A' }}>
+                                Showing {cacheEntry.experiences.length.toLocaleString()} of{' '}
+                                {cacheEntry.meta.total.toLocaleString()} published experiences
+                            </span>
+                        </div>
                     )}
                     {cacheEntry?.status === 'ready' &&
                         cacheEntry.experiences.length === 0 &&

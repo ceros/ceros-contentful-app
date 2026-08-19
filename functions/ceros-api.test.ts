@@ -458,3 +458,150 @@ describe('ceros-api function — whitespace in the pasted URL', () => {
         expect(fetch).not.toHaveBeenCalled()
     })
 })
+
+describe('ceros-api function — getFolderExperiences sweep', () => {
+    beforeEach(() => vi.stubGlobal('fetch', vi.fn()))
+    afterEach(() => vi.unstubAllGlobals())
+
+    const exp = (id: string, over: Record<string, unknown> = {}) => ({
+        resourceId: id,
+        name: `Experience ${id}`,
+        status: 'published',
+        isFlexExperience: false,
+        ...over,
+    })
+
+    // A page of the list route. `total`/`pages`/`next` mirror what the real
+    // envelope carries so the sweep's termination conditions are exercised.
+    const page = (rows: any[], { total = rows.length, pages = 1, next = null as string | null } = {}) =>
+        jsonOk({ resources: rows, paging: { total, page: 1, pages, pageSize: 50, next } })
+
+    const full = (from: number, count = 50) =>
+        Array.from({ length: count }, (_, i) => exp(`e${from + i}`))
+
+    const sweep = (query: Record<string, unknown> = {}) =>
+        handler(
+            makeEvent({ action: 'getFolderExperiences', folderId: 'f1', query: JSON.stringify(query) }),
+            makeContext('key')
+        )
+
+    const urls = () => vi.mocked(fetch).mock.calls.map((c) => String(c[0]))
+
+    it('concatenates multi-page responses in order', async () => {
+        vi.mocked(fetch)
+            .mockResolvedValueOnce(page(full(1), { total: 120, pages: 3, next: '?page=2' }) as any)
+            .mockResolvedValueOnce(page(full(51), { total: 120, pages: 3, next: '?page=3' }) as any)
+            .mockResolvedValueOnce(page(full(101, 20), { total: 120, pages: 3 }) as any)
+
+        const res: any = await sweep()
+        expect(res.data).toHaveLength(120)
+        expect(res.data[0].resourceId).toBe('e1')
+        expect(res.data[119].resourceId).toBe('e120')
+        expect(res.meta.total).toBe(120)
+        expect(res.meta.hasMore).toBe(false)
+        expect(res.paging).toBeNull()
+    })
+
+    it('stops on a short final page', async () => {
+        vi.mocked(fetch)
+            .mockResolvedValueOnce(page(full(1), { total: 70, pages: 2, next: '?page=2' }) as any)
+            .mockResolvedValueOnce(page(full(51, 20), { total: 70, pages: 2, next: '?page=3' }) as any)
+
+        const res: any = await sweep()
+        expect(res.data).toHaveLength(70)
+        expect(urls()).toHaveLength(2)
+    })
+
+    it('stops when paging reports no next page even on a full page', async () => {
+        vi.mocked(fetch).mockResolvedValueOnce(page(full(1), { total: 50, pages: 1, next: null }) as any)
+
+        const res: any = await sweep()
+        expect(res.data).toHaveLength(50)
+        expect(urls()).toHaveLength(1)
+    })
+
+    it('terminates on an empty first page instead of looping', async () => {
+        vi.mocked(fetch).mockResolvedValue(page([], { total: 0, pages: 0 }) as any)
+
+        const res: any = await sweep()
+        expect(res.data).toEqual([])
+        expect(res.meta.hasMore).toBe(false)
+        expect(urls()).toHaveLength(1)
+    })
+
+    it('caps a block at 20 pages and reports the next start page', async () => {
+        vi.mocked(fetch).mockImplementation(
+            async () => page(full(1), { total: 5000, pages: 100, next: '?page=x' }) as any
+        )
+
+        const res: any = await sweep()
+        expect(urls()).toHaveLength(20)
+        expect(res.data).toHaveLength(1000)
+        expect(res.meta.hasMore).toBe(true)
+        expect(res.meta.nextStartPage).toBe(21)
+        expect(res.meta.total).toBe(5000)
+    })
+
+    it('resumes from startPage and reports the block after it', async () => {
+        vi.mocked(fetch).mockImplementation(
+            async () => page(full(1), { total: 5000, pages: 100, next: '?page=x' }) as any
+        )
+
+        const res: any = await sweep({ startPage: 21 })
+        expect(urls()[0]).toContain('page=21')
+        expect(urls()[19]).toContain('page=40')
+        expect(res.meta.nextStartPage).toBe(41)
+    })
+
+    it('pins filter=published and ignores a caller-supplied filter', async () => {
+        vi.mocked(fetch).mockResolvedValue(page([exp('e1')]) as any)
+
+        await sweep({ filter: 'draft' })
+        expect(urls()[0]).toContain('filter=published')
+        expect(urls()[0]).not.toContain('draft')
+    })
+
+    it('forwards search and sort but never paging or consumed keys', async () => {
+        vi.mocked(fetch).mockResolvedValue(page([exp('e1')]) as any)
+
+        await sweep({ search: 'annual', sort: 'alphabetical_a_to_z', startPage: 3, page: 9, pageSize: 7, offset: 5 })
+        const url = urls()[0]
+        expect(url).toContain('search=annual')
+        expect(url).toContain('sort=alphabetical_a_to_z')
+        expect(url).toContain('page=3') // from startPage, not the forwarded `page`
+        expect(url).not.toContain('startPage')
+        expect(url).not.toContain('offset')
+        expect(url).toContain('pageSize=50') // the sweep's own, not the caller's 7
+        expect(url).not.toContain('pageSize=7')
+    })
+
+    it('drops templates and gated experiences, and counts them', async () => {
+        vi.mocked(fetch).mockResolvedValue(
+            page([
+                exp('keep'),
+                exp('tpl', { isTemplate: true }),
+                exp('pw', { isPasswordProtected: true }),
+                exp('sso', { isSSOProtected: true }),
+                exp('draft', { status: 'draft' }),
+            ]) as any
+        )
+
+        const res: any = await sweep()
+        expect(res.data.map((e: any) => e.resourceId)).toEqual(['keep'])
+        expect(res.meta.scanned).toBe(5)
+        expect(res.meta.returned).toBe(1)
+        expect(res.meta.droppedByFlags).toBe(3)
+        // filter=published is server-side now, so anything here means it regressed
+        expect(res.meta.droppedByStatus).toBe(1)
+    })
+
+    it('surfaces a mid-sweep error rather than a partial set', async () => {
+        vi.mocked(fetch)
+            .mockResolvedValueOnce(page(full(1), { total: 200, pages: 4, next: '?page=2' }) as any)
+            .mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({}), text: async () => 'boom' } as any)
+
+        const res: any = await sweep()
+        expect(res.error).toContain('500')
+        expect(res.data).toBeUndefined()
+    })
+})

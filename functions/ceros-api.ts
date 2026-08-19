@@ -42,36 +42,56 @@ export interface Paging {
   previous?: string
 }
 
-// Allowed query keys per action. Anything else in the JSON `query` is dropped
-// before forwarding, so the picker can pass query params freely without the
-// function becoming an open proxy.
+// Query keys the caller may set on the outgoing Ceros URL. Anything else in
+// the JSON `query` is dropped before forwarding, so the picker can pass query
+// params freely without the function becoming an open proxy.
+//
+// getFolderExperiences deliberately forwards neither paging nor `filter`: the
+// function owns paging (it sweeps whole blocks, see SWEEP_BLOCK_PAGES) and
+// pins filter=published itself, so no caller can widen the picker to drafts.
 const QUERY_WHITELIST: Record<string, string[]> = {
   getFolderTree: ['folder', 'depth'],
-  getFolderExperiences: ['page', 'pageSize', 'search', 'sort', 'offset'],
+  getFolderExperiences: ['search', 'sort'],
 }
 
-// Parses the JSON `query` field off the app-action body and returns a
-// URLSearchParams containing only the whitelisted keys for `action`.
-function parseQuery(action: string, rawQuery: unknown): URLSearchParams {
-  const params = new URLSearchParams()
-  const allowed = QUERY_WHITELIST[action] ?? []
-  if (typeof rawQuery !== 'string' || rawQuery.length === 0) return params
+// Query keys the function reads for itself and never forwards.
+const QUERY_CONSUMED: Record<string, string[]> = {
+  getFolderExperiences: ['startPage'],
+}
+
+// Parses the JSON `query` field off the app-action body once, splitting it
+// into the params that go on the outgoing URL and the ones this function acts
+// on itself. Keeping them apart is what stops a consumed key leaking upstream.
+function parseQuery(
+  action: string,
+  rawQuery: unknown
+): { forwarded: URLSearchParams; consumed: Record<string, string> } {
+  const forwarded = new URLSearchParams()
+  const consumed: Record<string, string> = {}
+  if (typeof rawQuery !== 'string' || rawQuery.length === 0) return { forwarded, consumed }
   let parsed: Record<string, unknown>
   try {
     parsed = JSON.parse(rawQuery)
   } catch {
-    return params
+    return { forwarded, consumed }
   }
-  for (const key of allowed) {
-    const value = parsed[key]
-    if (value !== undefined && value !== null && value !== '') {
-      params.set(key, String(value))
-    }
+  const isSet = (v: unknown) => v !== undefined && v !== null && v !== ''
+  for (const key of QUERY_WHITELIST[action] ?? []) {
+    if (isSet(parsed[key])) forwarded.set(key, String(parsed[key]))
   }
-  return params
+  for (const key of QUERY_CONSUMED[action] ?? []) {
+    if (isSet(parsed[key])) consumed[key] = String(parsed[key])
+  }
+  return { forwarded, consumed }
 }
 
 // ── API helpers ──────────────────────────────────────────────────────────────
+
+// The list route pages at 50. A folder's experiences are swept a block at a
+// time so the picker always holds a complete set to filter against; anything
+// beyond one block is fetched on demand via startPage.
+const SWEEP_PAGE_SIZE = 50
+const SWEEP_BLOCK_PAGES = 20
 
 const BASE_URL = 'https://rest.ceros.com'
 const API_VERSION = '2026-05-28-09-00'
@@ -218,23 +238,24 @@ function normalizeFolderTree(data: any): FolderNode[] {
     .filter((f: FolderNode) => f.resourceId && f.name !== 'Account Templates')
 }
 
-function normalizeExperiences(data: any): ExperienceNode[] {
-  const items = normalizeArray(data)
-  return items
-    .filter(
-      (e: any) =>
-        e.status === 'published' &&
-        !e.isTemplate &&
-        !e.isPasswordProtected &&
-        !e.isSSOProtected
-    )
-    .map((e: any) => ({
-      resourceId: String(e.resourceId ?? e.id ?? e.experienceId ?? ''),
-      name: String(e.name ?? e.title ?? ''),
-      thumbnailUrl: e.thumbnailUrl ?? e.thumbnail ?? undefined,
-      isFlexExperience: Boolean(e.isFlexExperience),
-    }))
-    .filter((e: ExperienceNode) => e.resourceId)
+function isPublished(e: any): boolean {
+  return e.status === 'published'
+}
+
+// The list route has no query param for any of these, so they can only be
+// dropped locally. That is the one remaining reason a folder's rendered count
+// can trail its published total.
+function isSelectable(e: any): boolean {
+  return !e.isTemplate && !e.isPasswordProtected && !e.isSSOProtected
+}
+
+function toExperienceNode(e: any): ExperienceNode {
+  return {
+    resourceId: String(e.resourceId ?? e.id ?? e.experienceId ?? ''),
+    name: String(e.name ?? e.title ?? ''),
+    thumbnailUrl: e.thumbnailUrl ?? e.thumbnail ?? undefined,
+    isFlexExperience: Boolean(e.isFlexExperience),
+  }
 }
 
 function extractPaging(resp: any): Paging | null {
@@ -296,7 +317,7 @@ async function run(
       const { accountResourceId } = accountResp
       if (!accountResourceId) return { error: 'Could not determine account resource ID.' }
 
-      const qs = parseQuery('getFolderTree', query)
+      const { forwarded: qs } = parseQuery('getFolderTree', query)
       if (!qs.has('depth')) qs.set('depth', '2') // depth is required by the API
       const treeResp = await cerosGet(
         `/accounts/${accountResourceId}/folder-tree?${qs.toString()}`,
@@ -312,14 +333,63 @@ async function run(
       if (!apiKey) return { error: NO_API_KEY_ERROR }
       if (!folderId) return { error: 'folderId is required' }
 
-      const qs = parseQuery('getFolderExperiences', query)
-      const resp = await cerosGet(
-        `/folder/${folderId}/experiences?${qs.toString()}`,
-        apiKey
-      )
-      if (resp._error) return { error: resp._error }
+      const { forwarded, consumed } = parseQuery('getFolderExperiences', query)
+      const startPage = Math.max(1, Number(consumed.startPage) || 1)
 
-      return { data: normalizeExperiences(resp), paging: extractPaging(resp) }
+      let page = startPage
+      let total = 0
+      let hasMore = false
+      const raw: any[] = []
+
+      while (true) {
+        const qs = new URLSearchParams(forwarded)
+        qs.set('filter', 'published') // pinned here, never caller-supplied
+        qs.set('pageSize', String(SWEEP_PAGE_SIZE))
+        qs.set('page', String(page))
+
+        const resp = await cerosGet(`/folder/${folderId}/experiences?${qs.toString()}`, apiKey)
+        // Surface the error rather than returning the pages that did arrive —
+        // a partial set would look complete to the picker, which filters on
+        // the assumption that it holds everything.
+        if (resp._error) return { error: resp._error }
+
+        const rows = normalizeArray(resp)
+        raw.push(...rows)
+
+        const paging = extractPaging(resp)
+        if (page === startPage) total = paging?.total ?? rows.length
+
+        // Four independent stops. The last three are each sufficient on their
+        // own; together they keep a malformed envelope from spinning forever.
+        if (rows.length === 0) break
+        if (rows.length < SWEEP_PAGE_SIZE) break
+        if (paging && (!paging.next || page >= paging.pages)) break
+        if (page - startPage + 1 >= SWEEP_BLOCK_PAGES) {
+          hasMore = true
+          break
+        }
+        page++
+      }
+
+      // filter=published is applied server-side now, so this should never drop
+      // anything. Counting rather than trusting means a regression upstream
+      // shows up in the logs instead of silently reaching the picker.
+      const published = raw.filter(isPublished)
+      const kept = published.filter(isSelectable)
+
+      return {
+        data: kept.map(toExperienceNode).filter((e: ExperienceNode) => e.resourceId),
+        paging: null,
+        meta: {
+          total,
+          scanned: raw.length,
+          returned: kept.length,
+          droppedByStatus: raw.length - published.length,
+          droppedByFlags: published.length - kept.length,
+          hasMore,
+          nextStartPage: hasMore ? page + 1 : null,
+        },
+      }
     }
 
     case 'getEmbedCode': {
