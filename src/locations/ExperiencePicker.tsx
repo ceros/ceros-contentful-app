@@ -27,12 +27,16 @@ interface ExperienceNode {
     isFlexExperience: boolean
 }
 
-// Depth-first search for a folder by id within a (possibly nested) tree.
+// Breadth-first search for a folder by id within a (possibly nested) tree.
+// Iterative rather than recursive so the walk never grows the call stack,
+// however deep the tree the API hands back.
 function findFolderNode(tree: FolderNode[], id: string): FolderNode | null {
-    for (const node of tree) {
+    const queue: FolderNode[] = [...tree]
+    // Index cursor instead of shift() so dequeuing stays O(1).
+    for (let i = 0; i < queue.length; i++) {
+        const node = queue[i]
         if (node.resourceId === id) return node
-        const found = findFolderNode(node.children, id)
-        if (found) return found
+        for (const child of node.children) queue.push(child)
     }
     return null
 }
@@ -438,6 +442,14 @@ type FolderCacheEntry =
     | { status: 'ready'; experiences: ExperienceNode[]; paging: Paging | null; page: number }
     | { status: 'error' }
 
+// Subfolders are fetched lazily per folder, so they need the same three states
+// the experience cache has. Without an explicit 'error' the UI cannot tell
+// "this folder has no subfolders" from "we failed to load them".
+type SubFolderCacheEntry =
+    | { status: 'loading' }
+    | { status: 'ready'; children: FolderNode[] }
+    | { status: 'error' }
+
 export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePickerProps) {
     const sdk = useSDK<EditorAppSDK>()
 
@@ -445,7 +457,7 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
     const [folders, setFolders] = useState<FolderNode[]>([])
     const [folderStack, setFolderStack] = useState<FolderNode[]>([])
     const [experienceCache, setExperienceCache] = useState<Record<string, FolderCacheEntry>>({})
-    const [folderChildren, setFolderChildren] = useState<Record<string, FolderNode[]>>({})
+    const [folderChildren, setFolderChildren] = useState<Record<string, SubFolderCacheEntry>>({})
     const [loading, setLoading] = useState(false)
     const [loadingExpId, setLoadingExpId] = useState<string | null>(null)
     const [error, setError] = useState<string | null>(null)
@@ -463,9 +475,13 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
     // Single source of truth for the current folder's list query (sort +
     // search). Both the fetch effect and pagination read it, so they stay
     // in sync with the active Sort/Search controls.
+    // Reads the *debounced* term, not the raw input: the fetch effect below is
+    // keyed on debouncedSearch, so building the query from searchTerm would let
+    // an unrelated change (a Sort switch, a page click) fire mid-typing with a
+    // term the effect has not settled on yet.
     const buildExperienceQuery = (): Record<string, unknown> => ({
         sort,
-        ...(searchTerm ? { search: searchTerm } : {}),
+        ...(debouncedSearch ? { search: debouncedSearch } : {}),
     })
 
     const fetchFolderPage = (folder: FolderNode, actionId: string, page = 1, extraQuery: Record<string, unknown> = {}) => {
@@ -497,16 +513,31 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
     // include other folders, so we locate this folder within it and take its
     // children.
     const loadSubFolders = async (folder: FolderNode, actionId: string, depth: number) => {
-        if (folder.children.length > 0 || folderChildren[folder.resourceId]) return
-        const res = await callFunction(actionId, {
-            action: 'getFolderTree',
-            query: JSON.stringify({ folder: folder.resourceId, depth }),
-        })
-        if (!res.error) {
+        if (folder.children.length > 0) return
+        // Skip a folder already loading or loaded; an errored one may be retried.
+        const cached = folderChildren[folder.resourceId]
+        if (cached && cached.status !== 'error') return
+
+        setFolderChildren((prev) => ({ ...prev, [folder.resourceId]: { status: 'loading' } }))
+        try {
+            const res = await callFunction(actionId, {
+                action: 'getFolderTree',
+                query: JSON.stringify({ folder: folder.resourceId, depth }),
+            })
+            if (res.error) throw new Error(String(res.error))
             const raw = (res.data as FolderNode[]) ?? []
             const node = findFolderNode(raw, folder.resourceId)
             const kids = node ? node.children : raw
-            setFolderChildren((prev) => ({ ...prev, [folder.resourceId]: kids }))
+            setFolderChildren((prev) => ({
+                ...prev,
+                [folder.resourceId]: { status: 'ready', children: kids },
+            }))
+        } catch (err) {
+            // callCerosAction throws on a transport failure and the envelope
+            // carries business failures, so both land here. Record the failure
+            // instead of leaving the folder indistinguishable from an empty one.
+            console.error('[CerosApi] getFolderTree (subfolders) error:', err)
+            setFolderChildren((prev) => ({ ...prev, [folder.resourceId]: { status: 'error' } }))
         }
     }
 
@@ -582,7 +613,10 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
         setSearchTerm('')
         setDebouncedSearch('')
         setTypeFilter(null)
-        loadSubFolders(folder, appActionId!, childDepth)
+        // Deliberately not awaited: navigation is optimistic, so the folder
+        // opens straight away and its children fill in when the fetch lands.
+        // loadSubFolders records its own failures, so this cannot reject.
+        if (appActionId) void loadSubFolders(folder, appActionId, childDepth)
     }
 
     const handleBack = () => {
@@ -644,8 +678,19 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
     }
     const handleBackToBrowse = () => setConfirming(null)
 
-    const childrenOf = (folder: FolderNode): FolderNode[] =>
-        folder.children.length > 0 ? folder.children : folderChildren[folder.resourceId] ?? []
+    const childrenOf = (folder: FolderNode): FolderNode[] => {
+        if (folder.children.length > 0) return folder.children
+        const entry = folderChildren[folder.resourceId]
+        return entry?.status === 'ready' ? entry.children : []
+    }
+
+    // Subfolders count as settled when they came inline with the parent tree or
+    // their lazy fetch finished successfully. Used to hold back the empty state
+    // while they are still in flight or failed.
+    const subFolderStatus = (folder: FolderNode): 'loading' | 'ready' | 'error' => {
+        if (folder.children.length > 0) return 'ready'
+        return folderChildren[folder.resourceId]?.status ?? 'loading'
+    }
 
     if (!isShown) return null
 
@@ -670,12 +715,24 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
 
         if (isInFolder) {
             const subFolders = currentFolder ? childrenOf(currentFolder) : []
+            const subStatus = currentFolder ? subFolderStatus(currentFolder) : 'ready'
             const hasExperiences = cacheEntry?.status === 'ready' && cacheEntry.experiences.length > 0
             return (
                 <>
                     {expError && (
                         <div style={{ marginBottom: 12 }}>
                             <Note variant="negative">{expError}</Note>
+                        </div>
+                    )}
+                    {/* Overlapping with ExperiencesSkeleton below is intentional: both
+                        lists load independently, so showing both placeholders is the
+                        honest signal that neither has arrived yet. */}
+                    {subStatus === 'loading' && <FoldersSkeleton />}
+                    {subStatus === 'error' && (
+                        <div style={{ marginBottom: 12 }}>
+                            <Note variant="negative">
+                                Failed to load the folders inside this one. Go back and try opening it again.
+                            </Note>
                         </div>
                     )}
                     {subFolders.length > 0 && (
@@ -740,9 +797,12 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
                             onPageChange={(p) => appActionId && fetchFolderPage(currentFolder, appActionId, p + 1, buildExperienceQuery())}
                         />
                     )}
-                    {cacheEntry?.status === 'ready' && cacheEntry.experiences.length === 0 && subFolders.length === 0 && (
-                        <EmptyFolderState />
-                    )}
+                    {cacheEntry?.status === 'ready' &&
+                        cacheEntry.experiences.length === 0 &&
+                        subFolders.length === 0 &&
+                        // Only once subfolders have settled — otherwise a folder
+                        // whose subfolder fetch is in flight or failed reads as empty.
+                        subStatus === 'ready' && <EmptyFolderState />}
                 </>
             )
         }
