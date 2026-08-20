@@ -31,6 +31,15 @@ export interface ExperienceNode {
   thumbnailUrl?: string
 }
 
+export interface Paging {
+  total: number
+  page: number
+  pages: number
+  pageSize: number
+  next?: string
+  previous?: string
+}
+
 // ── API helpers ──────────────────────────────────────────────────────────────
 
 const BASE_URL = 'https://rest.ceros.com'
@@ -51,6 +60,12 @@ async function cerosGet(
 ): Promise<any> {
   const response = await fetch(`${BASE_URL}${path}`, { headers: makeHeaders(apiKey) })
   if (!response.ok) {
+    if (response.status === 401) {
+      return { _error: 'Ceros API key is invalid. Check it in the app configuration.' }
+    }
+    if (response.status === 403) {
+      return { _error: 'There is a problem with your Ceros API key. Check it in the app configuration.' }
+    }
     const text = await response.text()
     return { _error: `Ceros API error (${response.status}): ${text}` }
   }
@@ -69,7 +84,6 @@ function normalizeArray(data: any): any[] {
 }
 
 function normalizeFolderTree(data: any): FolderNode[] {
-  console.log('Normalize folder tree')
   return normalizeArray(data)
     .map((f: any) => ({
       resourceId: String(f.resourceId ?? f.id ?? ''),
@@ -80,7 +94,6 @@ function normalizeFolderTree(data: any): FolderNode[] {
 }
 
 function normalizeExperiences(data: any): ExperienceNode[] {
-  console.log('Normalize experiences')
   return normalizeArray(data)
     .filter(
       (e: any) =>
@@ -95,6 +108,19 @@ function normalizeExperiences(data: any): ExperienceNode[] {
       thumbnailUrl: e.thumbnailUrl ?? e.thumbnail ?? undefined,
     }))
     .filter((e: ExperienceNode) => e.resourceId)
+}
+
+function extractPaging(resp: any): Paging | null {
+  const p = resp?.paging
+  if (!p || typeof p.total !== 'number') return null
+  return {
+    total: p.total,
+    page: p.page,
+    pages: p.pages,
+    pageSize: p.pageSize,
+    next: p.next,
+    previous: p.previous,
+  }
 }
 
 function extractUrlFromEmbedCode(html: string): string {
@@ -116,26 +142,27 @@ export const handler = async (
   event: AppActionEvent,
   context: FunctionContext
 ): Promise<Record<string, unknown>> => {
-  console.log('Handler start')
   try {
     const result = await run(event, context)
-    console.log('Hander end')
     return result
   } catch (err: any) {
     return { error: `Unexpected function error: ${err?.message ?? String(err)}` }
   }
 }
 
+const NO_API_KEY_ERROR = 'Ceros API key is not configured. Please set it in the app configuration.'
+
+// Actions that read the Ceros REST API need a configured key. Returning it
+// rather than erroring here lets each action decide, so a future action that
+// only reads public pages can work on installs that never set one.
+function requireApiKey(context: FunctionContext): string | null {
+  return context.appInstallationParameters?.cerosApiKey ?? null
+}
+
 async function run(
   event: AppActionEvent,
   context: FunctionContext
 ): Promise<Record<string, unknown>> {
-  console.log('Run start')
-  const apiKey = context.appInstallationParameters?.cerosApiKey
-  if (!apiKey) {
-    return { error: 'Ceros API key is not configured. Please set it in the app configuration.' }
-  }
-
   const { action, folderId, resourceId } = event.body as {
     action?: string
     folderId?: string
@@ -144,7 +171,9 @@ async function run(
 
   switch (action) {
     case 'getFolderTree': {
-      console.log('Get Folder Tree start')
+      const apiKey = requireApiKey(context)
+      if (!apiKey) return { error: NO_API_KEY_ERROR }
+
       const accountResp = await cerosGet('/accounts/current-account', apiKey)
       if (accountResp._error) return { error: accountResp._error }
 
@@ -154,22 +183,25 @@ async function run(
       const treeResp = await cerosGet(`/accounts/${accountResourceId}/folder-tree`, apiKey)
       if (treeResp._error) return { error: treeResp._error }
 
-      console.log('Get Folder Tree end')
-      return { folders: normalizeFolderTree(treeResp) }
+      return { data: normalizeFolderTree(treeResp), paging: null }
     }
 
     case 'getFolderExperiences': {
-      console.log('Get Folder Experiences start')
+      const apiKey = requireApiKey(context)
+      if (!apiKey) return { error: NO_API_KEY_ERROR }
+
       if (!folderId) return { error: 'folderId is required' }
 
       const resp = await cerosGet(`/folder/${folderId}/experiences`, apiKey)
       if (resp._error) return { error: resp._error }
 
-      console.log('Get Folder Experiences end')
-      return { experiences: normalizeExperiences(resp) }
+      return { data: normalizeExperiences(resp), paging: extractPaging(resp) }
     }
 
     case 'getEmbedCode': {
+      const apiKey = requireApiKey(context)
+      if (!apiKey) return { error: NO_API_KEY_ERROR }
+
       if (!resourceId) return { error: 'resourceId is required' }
 
       const resp = await cerosGet(`/experiences/${resourceId}/embed-codes`, apiKey)
@@ -178,7 +210,7 @@ async function run(
       const embedCode: string = resp.fullHeightEmbedCode || resp.scrollableEmbedCode || ''
       const url = extractUrlFromEmbedCode(embedCode)
 
-      return { embedCode, url }
+      return { data: { embedCode, url }, paging: null }
     }
 
     default:
