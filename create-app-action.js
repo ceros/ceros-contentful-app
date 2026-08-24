@@ -62,6 +62,13 @@ const ACTION_DEFINITION = {
       required: false,
       description: 'Required for getEmbedCode',
     },
+    {
+      id: 'query',
+      name: 'Query',
+      type: 'Symbol',
+      required: false,
+      description: 'JSON string of query params for the target endpoint (whitelisted per action)',
+    },
   ],
 }
 
