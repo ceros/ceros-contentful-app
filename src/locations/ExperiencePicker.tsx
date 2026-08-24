@@ -374,7 +374,7 @@ function ExperienceCard({
         >
             <div style={s.cardThumb}>
                 {exp.thumbnailUrl ? (
-                    <img src={exp.thumbnailUrl} alt="" style={s.cardThumbImg} />
+                    <img src={exp.thumbnailUrl} alt="" style={s.cardThumbImg} loading="lazy" />
                 ) : (
                     <div style={{ width: '100%', height: '100%', background: '#E9EBEC' }} />
                 )}
@@ -782,7 +782,15 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
                                 </div>
                             ) : (
                                 <Note variant="neutral">
-                                    No {typeFilter === 'flex' ? 'Flex' : 'Studio'} experiences on this page. Try another page or clear the filter.
+                                    No {typeFilter === 'flex' ? 'Flex' : 'Studio'} experiences
+                                    {/* The type filter is client-side over the loaded page, so the
+                                        advice depends on whether a page 2 actually exists. With
+                                        pageSize pinned to 1000 it usually does not, and telling an
+                                        editor to "try another page" when there is no pager is a
+                                        dead end. */}
+                                    {cacheEntry.paging && cacheEntry.paging.pages > 1
+                                        ? ' on this page. Try another page or clear the filter.'
+                                        : ' in this folder. Clear the filter to see everything here.'}
                                 </Note>
                             )}
                         </section>
@@ -791,7 +799,6 @@ export function ExperiencePicker({ isShown, onClose, onSelect }: ExperiencePicke
                         <Pagination
                             activePage={cacheEntry.page - 1}
                             itemsPerPage={cacheEntry.paging.pageSize}
-                            totalItems={cacheEntry.paging.total}
                             isLastPage={!cacheEntry.paging.next}
                             pageLength={cacheEntry.experiences.length}
                             onPageChange={(p) => appActionId && fetchFolderPage(currentFolder, appActionId, p + 1, buildExperienceQuery())}
