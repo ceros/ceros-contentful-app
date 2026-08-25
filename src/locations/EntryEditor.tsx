@@ -14,10 +14,32 @@ import React, { Dispatch, useEffect, useRef, useState } from 'react'
 
 import cerosLogo from '../assets/ceros-logo.svg'
 import styles from '../styles'
-import { getExperienceMetadata } from '../oembed'
+import { getExperienceMetadata, parseCerosUrl } from '../oembed'
 import { AppInstallationParameters } from './ConfigScreen'
 import tokens from '@contentful/f36-tokens'
 import { ExperiencePicker, SelectedExperience } from './ExperiencePicker'
+import { classifyEmbed, EmbedKind } from '../embed-classify'
+import { callCerosAction, findCerosActionId } from '../ceros-action'
+import { ConfirmationModel, EmbedVariant, ExperienceConfirmation } from '../ExperienceConfirmation'
+
+export { classifyEmbed } from '../embed-classify'
+export type { EmbedKind } from '../embed-classify'
+
+// Restores a field to a previously-captured value. getValue() returns
+// undefined for a field that was never set (e.g. a fresh entry) — setValue()
+// is the wrong API for clearing a field in that case (it also leaves an
+// unhandled promise), so an absent previous value is restored with
+// removeValue() instead.
+const restoreField = (
+    field: { setValue: (value: unknown) => unknown; removeValue: () => unknown },
+    previousValue: unknown
+) => {
+    if (previousValue === undefined) {
+        field.removeValue()
+    } else {
+        field.setValue(previousValue)
+    }
+}
 
 interface StateProps {
     entry: EntryAPI
@@ -26,96 +48,170 @@ interface StateProps {
 }
 
 function EmptyState({ entry, setLinked, parameters }: StateProps) {
+    const sdk = useSDK<EditorAppSDK>()
     const [experienceUrl, setExperienceUrl] = useState('')
     const [loading, setLoading] = useState(false)
     const [isCerosExperienceInvalid, setIsCerosExperienceInvalid] = useState(false)
     const [isChooserOpen, setIsChooserOpen] = useState(false)
+    const [saveError, setSaveError] = useState(false)
+    const [confirming, setConfirming] = useState<ConfirmationModel | null>(null)
+    const [resolveError, setResolveError] = useState<string | null>(null)
 
-    const linkByUrl = async (url: string) => {
+    // Commits a chosen experience + embed code to the entry. Shared by the
+    // picker and the paste flow so both save identically.
+    const commit = (name: string, url: string, embedCode: string) => {
         setLoading(true)
-        setIsCerosExperienceInvalid(false)
 
-        const experienceMetadata = await getExperienceMetadata(url)
+        // Capture the persisted values before writing the draft, so a failed
+        // save can roll the in-memory fields back instead of leaving the
+        // editor holding values that were never actually stored.
+        const previousTitle = entry.fields[parameters.titleFieldId].getValue()
+        const previousUrl = entry.fields[parameters.urlFieldId].getValue()
+        const previousEmbedCode = entry.fields[parameters.embedCodeFieldId].getValue()
 
-        if (experienceMetadata) {
-            entry.fields[parameters.titleFieldId].setValue(experienceMetadata['title'])
-            entry.fields[parameters.urlFieldId].setValue(experienceMetadata['url'])
-            entry.fields[parameters.embedCodeFieldId].setValue(experienceMetadata['html'])
+        entry.fields[parameters.titleFieldId].setValue(name)
+        entry.fields[parameters.urlFieldId].setValue(url)
+        entry.fields[parameters.embedCodeFieldId].setValue(embedCode)
 
-            entry.save().then(() => {
+        setSaveError(false)
+        entry.save()
+            .then(() => {
                 setLoading(false)
                 setLinked(true)
             })
-        } else {
-            console.error(`Couldn't get experience metadata for url: '${url}'`)
+            .catch((err) => {
+                console.error('Failed to save entry:', err)
+                // Flip the UI state first: if a rollback call below ever threw,
+                // the note would otherwise be dropped and the button would be
+                // stuck on its loading label — the exact failure mode the
+                // rollback itself was added to eliminate.
+                setSaveError(true)
+                setLoading(false)
+                restoreField(entry.fields[parameters.titleFieldId], previousTitle)
+                restoreField(entry.fields[parameters.urlFieldId], previousUrl)
+                restoreField(entry.fields[parameters.embedCodeFieldId], previousEmbedCode)
+            })
+    }
+
+    const linkByUrl = async (rawUrl: string) => {
+        setIsCerosExperienceInvalid(false)
+        setResolveError(null)
+        setSaveError(false)
+
+        // Copied URLs routinely arrive with surrounding whitespace or a trailing
+        // newline. Trim once here so everything downstream — the pre-filter, the
+        // function call, and the oEmbed query the function builds from this
+        // string — sees the same clean value.
+        const url = rawUrl.trim()
+
+        // Keep the existing host allowlist as a cheap pre-filter. It no longer
+        // decides Flex vs Studio — the function's HEAD does that — it only keeps
+        // obviously non-Ceros URLs from reaching the function.
+        if (!parseCerosUrl(url)) {
             setIsCerosExperienceInvalid(true)
+            return
+        }
+
+        setLoading(true)
+        try {
+            const actionId = await findCerosActionId(sdk)
+            const res = await callCerosAction(sdk, actionId, { action: 'resolveExperience', url })
+            if (res.error) throw new Error(String(res.error))
+
+            const d = res.data as ConfirmationModel
+            if (!d || !d.embedCodes || Object.keys(d.embedCodes).length === 0) {
+                throw new Error('No embed code could be generated for this experience.')
+            }
+            setConfirming(d)
+        } catch (err) {
+            console.error('Failed to resolve experience:', err)
+            setResolveError(err instanceof Error ? err.message : String(err))
+        } finally {
             setLoading(false)
         }
     }
 
     const handleSelectExperience = ({ name, url, embedCode }: SelectedExperience) => {
         setIsChooserOpen(false)
-        setLoading(true)
-
-        entry.fields[parameters.titleFieldId].setValue(name)
-        entry.fields[parameters.urlFieldId].setValue(url)
-        entry.fields[parameters.embedCodeFieldId].setValue(embedCode)
-
-        entry.save().then(() => {
-            setLoading(false)
-            setLinked(true)
-        })
+        commit(name, url, embedCode)
     }
 
     return (
         <>
-            <ExperiencePicker
-                isShown={isChooserOpen}
-                onClose={() => setIsChooserOpen(false)}
-                onSelect={handleSelectExperience}
-            />
-
-            <img src={cerosLogo} alt="Ceros Logo" className={styles.logo} width="150px" />
-
-            <Paragraph>
-                Enter the link to your published Ceros experience below, or browse your experiences using the Ceros
-                API.
-            </Paragraph>
-
-            <Form onSubmit={() => linkByUrl(experienceUrl)}>
-                <FormControl isInvalid={isCerosExperienceInvalid}>
-                    <FormControl.Label isRequired>Ceros Experience URL</FormControl.Label>
-                    <TextInput
-                        value={experienceUrl}
-                        type="text"
-                        name="experienceUrl"
-                        placeholder="https://account.ceros.site/experience"
-                        onChange={(e) => setExperienceUrl(e.target.value)}
+            {saveError && (
+                <Box marginBottom="spacingM">
+                    <Note variant="negative">
+                        Couldn't save this entry. Please try again. If the problem persists, refresh Contentful and retry.
+                    </Note>
+                </Box>
+            )}
+            {confirming ? (
+                <>
+                    <img src={cerosLogo} alt="Ceros Logo" className={styles.logo} width="150px" />
+                    <ExperienceConfirmation
+                        model={confirming}
+                        onInsert={(embedCode) => commit(confirming.name, confirming.url, embedCode)}
+                        onBack={() => setConfirming(null)}
+                        isBusy={loading}
                     />
-                    {isCerosExperienceInvalid && (
-                        <FormControl.ValidationMessage>
-                            The experience URL is invalid. Make sure it looks like
-                            'https://account.ceros.site/experience' or 'https://view.ceros.com/account/experience' and that the experience is published.
-                        </FormControl.ValidationMessage>
-                    )}
-                </FormControl>
+                </>
+            ) : (
+                <>
+                    <ExperiencePicker
+                        isShown={isChooserOpen}
+                        onClose={() => setIsChooserOpen(false)}
+                        onSelect={handleSelectExperience}
+                    />
 
-                <Flex gap="spacingM">
-                    <Button variant="positive" type="submit" isDisabled={loading} isLoading={loading}>
-                        {loading ? 'Linking Experience' : 'Link Experience'}
-                    </Button>
-                    <Button
-                        variant="secondary"
-                        isDisabled={loading}
-                        onClick={(e: React.MouseEvent) => {
-                            e.preventDefault()
-                            setIsChooserOpen(true)
-                        }}
-                    >
-                        Browse Experiences
-                    </Button>
-                </Flex>
-            </Form>
+                    {resolveError && (
+                        <Box marginBottom="spacingM">
+                            <Note variant="negative">{resolveError}</Note>
+                        </Box>
+                    )}
+
+                    <img src={cerosLogo} alt="Ceros Logo" className={styles.logo} width="150px" />
+
+                    <Paragraph>
+                        Enter the link to your published Ceros experience below, or browse your experiences using the Ceros
+                        API.
+                    </Paragraph>
+
+                    <Form onSubmit={() => linkByUrl(experienceUrl)}>
+                        <FormControl isInvalid={isCerosExperienceInvalid}>
+                            <FormControl.Label isRequired>Ceros Experience URL</FormControl.Label>
+                            <TextInput
+                                value={experienceUrl}
+                                type="text"
+                                name="experienceUrl"
+                                placeholder="https://account.ceros.site/experience"
+                                onChange={(e) => setExperienceUrl(e.target.value)}
+                            />
+                            {isCerosExperienceInvalid && (
+                                <FormControl.ValidationMessage>
+                                    The experience URL is invalid. Make sure it looks like
+                                    'https://account.ceros.site/experience' or 'https://view.ceros.com/account/experience' and that the experience is published.
+                                </FormControl.ValidationMessage>
+                            )}
+                        </FormControl>
+
+                        <Flex gap="spacingM">
+                            <Button variant="positive" type="submit" isDisabled={loading} isLoading={loading}>
+                                {loading ? 'Linking Experience' : 'Link Experience'}
+                            </Button>
+                            <Button
+                                variant="secondary"
+                                isDisabled={loading}
+                                onClick={(e: React.MouseEvent) => {
+                                    e.preventDefault()
+                                    setIsChooserOpen(true)
+                                }}
+                            >
+                                Browse Experiences
+                            </Button>
+                        </Flex>
+                    </Form>
+                </>
+            )}
         </>
     )
 }
