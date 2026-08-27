@@ -69,4 +69,3 @@ export function classifyVariant(embedCode: string): EmbedVariant | null {
 
     return null
 }
-

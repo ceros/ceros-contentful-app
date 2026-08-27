@@ -66,6 +66,69 @@ describe('ceros-api function — getEmbedCode', () => {
     })
 })
 
+// The outgoing list URL is the one thing no other test pinned, and it is
+// exactly where this integration has broken: the upstream path went plural
+// (the old singular one 404s at every api-version, so nothing is negotiated
+// on our behalf), and `filter`/`pageSize` are pinned by this file rather than
+// sent by the picker. None of that is visible to a result-shape assertion —
+// the whole suite passed green against a dead path — so assert the request.
+describe('ceros-api function — getFolderExperiences request', () => {
+    beforeEach(() => vi.stubGlobal('fetch', vi.fn()))
+    afterEach(() => vi.unstubAllGlobals())
+
+    async function requestFor(query?: string) {
+        vi.mocked(fetch).mockResolvedValue(jsonOk({ resources: [], paging: null }) as any)
+        await handler(
+            makeEvent({ action: 'getFolderExperiences', folderId: 'f1', ...(query ? { query } : {}) }),
+            makeContext('key') as any
+        )
+        const [url, init] = vi.mocked(fetch).mock.calls[0]
+        return { url: new URL(String(url)), init: init as any }
+    }
+
+    it('asks the plural path for published experiences at the pinned page size and version', async () => {
+        const { url, init } = await requestFor()
+        expect(url.pathname).toBe('/folders/f1/experiences')
+        expect(url.searchParams.get('filter')).toBe('published')
+        expect(url.searchParams.get('pageSize')).toBe('1000')
+        // Bumping the version is a deliberate act: it changes the list envelope
+        // (`data` -> `resources` at 2026-08-06-09-00), so it should require
+        // editing this expectation rather than passing silently.
+        expect(init.headers['X-Ceros-Api-Version']).toBe('2026-08-06-09-00')
+    })
+
+    it('forwards sort, search and page but lets no caller widen filter or pageSize', async () => {
+        const { url } = await requestFor(
+            JSON.stringify({ sort: 'last_published', search: 'brass', page: 2, filter: 'draft', pageSize: '5' })
+        )
+        expect(url.searchParams.get('sort')).toBe('last_published')
+        expect(url.searchParams.get('search')).toBe('brass')
+        expect(url.searchParams.get('page')).toBe('2')
+        // Neither key is on this action's allowlist, so the pinned values stand
+        // and a direct CMA invocation cannot pull drafts into the picker.
+        expect(url.searchParams.get('filter')).toBe('published')
+        expect(url.searchParams.get('pageSize')).toBe('1000')
+    })
+
+    it('reads the 2026-08-06-09-00 `resources` envelope', async () => {
+        vi.mocked(fetch).mockResolvedValue(
+            jsonOk({
+                resourceType: 'experience',
+                paging: { total: 1, page: 1, pages: 1, pageSize: 1000 },
+                resources: [
+                    { resourceId: 'exp-1', name: 'Fifth Brass Storm', isFlexExperience: true, isTemplate: false, isPasswordProtected: false, isSSOProtected: false },
+                ],
+            }) as any
+        )
+        const result = await handler(
+            makeEvent({ action: 'getFolderExperiences', folderId: 'f1' }),
+            makeContext('key') as any
+        )
+        expect((result.data as any[]).map((e) => e.resourceId)).toEqual(['exp-1'])
+        expect((result.paging as any).pageSize).toBe(1000)
+    })
+})
+
 const MANIFEST_URL = 'https://myaccount.ceros.site/flex-experience/manifest.v1.json'
 // Deliberately a different path than FLEX_PAGE + '/manifest.v1.json', so a
 // concatenating implementation can't accidentally match it.

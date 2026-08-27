@@ -109,4 +109,3 @@ describe('classifyVariant', () => {
         expect(classifyVariant('')).toBeNull()
     })
 })
-

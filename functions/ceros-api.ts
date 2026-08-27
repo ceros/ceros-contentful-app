@@ -47,7 +47,7 @@ export interface Paging {
 // function becoming an open proxy.
 const QUERY_WHITELIST: Record<string, string[]> = {
   getFolderTree: ['folder', 'depth'],
-  getFolderExperiences: ['page', 'pageSize', 'search', 'sort', 'offset'],
+  getFolderExperiences: ['page', 'search', 'sort'],
 }
 
 // Parses the JSON `query` field off the app-action body and returns a
@@ -74,7 +74,7 @@ function parseQuery(action: string, rawQuery: unknown): URLSearchParams {
 // ── API helpers ──────────────────────────────────────────────────────────────
 
 const BASE_URL = 'https://rest.ceros.com'
-const API_VERSION = '2026-05-28-09-00'
+const API_VERSION = '2026-08-06-09-00'
 
 function makeHeaders(apiKey: string): Record<string, string> {
   return {
@@ -223,7 +223,6 @@ function normalizeExperiences(data: any): ExperienceNode[] {
   return items
     .filter(
       (e: any) =>
-        e.status === 'published' &&
         !e.isTemplate &&
         !e.isPasswordProtected &&
         !e.isSSOProtected
@@ -313,8 +312,10 @@ async function run(
       if (!folderId) return { error: 'folderId is required' }
 
       const qs = parseQuery('getFolderExperiences', query)
+      qs.set('filter', 'published') // only published experiences are selectable
+      qs.set('pageSize', '1000')
       const resp = await cerosGet(
-        `/folder/${folderId}/experiences?${qs.toString()}`,
+        `/folders/${folderId}/experiences?${qs.toString()}`,
         apiKey
       )
       if (resp._error) return { error: resp._error }

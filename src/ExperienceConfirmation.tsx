@@ -37,6 +37,7 @@ export interface ExperienceConfirmationProps {
 // it — classifyVariant answers that one from the markup.
 const VARIANT_ORDER: EmbedVariant[] = ['fullHeight', 'scrollable', 'inline']
 
+
 const VARIANT_LABELS: Record<EmbedVariant, string> = {
     fullHeight: 'Full height',
     scrollable: 'Scrollable',
