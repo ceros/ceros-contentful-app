@@ -2,7 +2,13 @@ import { Box, Button, Flex, Note, Paragraph } from '@contentful/f36-components'
 import tokens from '@contentful/f36-tokens'
 import React, { useEffect, useState } from 'react'
 
-export type EmbedVariant = 'fullHeight' | 'scrollable' | 'inline'
+import { EmbedPreview } from './EmbedPreview'
+import { EmbedVariant } from './embed-classify'
+
+// Re-exported so existing importers keep their single import site. The
+// definition lives beside classifyVariant, which has to name the same three
+// styles to identify a stored embed code as one of them.
+export type { EmbedVariant }
 
 export interface ConfirmationModel {
     name: string
@@ -24,10 +30,12 @@ export interface ExperienceConfirmationProps {
     isBusy?: boolean
 }
 
-// Exported so callers outside this component (EntryEditor's currentVariant
-// fallback) can pick a variant that actually exists in a model using the same
-// preference order, instead of guessing a fixed variant that might be absent.
-export const VARIANT_ORDER: EmbedVariant[] = ['fullHeight', 'scrollable', 'inline']
+// The order the styles are offered in, and the precedence for choosing a
+// default when the caller's preselected variant has no code in the model.
+// Local to this screen on purpose: identifying which style an entry is ALREADY
+// stored in is a different question, and preference order is the wrong tool for
+// it — classifyVariant answers that one from the markup.
+const VARIANT_ORDER: EmbedVariant[] = ['fullHeight', 'scrollable', 'inline']
 
 const VARIANT_LABELS: Record<EmbedVariant, string> = {
     fullHeight: 'Full height',
@@ -170,6 +178,7 @@ export function ExperienceConfirmation({
 
             {selectedCode && (
                 <Box marginTop="spacingL">
+                    <EmbedPreview embedCode={selectedCode} />
                 </Box>
             )}
         </Box>
