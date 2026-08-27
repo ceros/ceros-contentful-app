@@ -18,7 +18,7 @@ import { parseCerosUrl } from '../oembed'
 import { AppInstallationParameters } from './ConfigScreen'
 import tokens from '@contentful/f36-tokens'
 import { ExperiencePicker, SelectedExperience } from './ExperiencePicker'
-import { classifyEmbed, EmbedKind } from '../embed-classify'
+import { classifyEmbed, classifyVariant, EmbedKind } from '../embed-classify'
 import { EmbedPreview } from '../EmbedPreview'
 import { callCerosAction, findCerosActionId } from '../ceros-action'
 import { ConfirmationModel, EmbedVariant, ExperienceConfirmation } from '../ExperienceConfirmation'
@@ -40,6 +40,15 @@ const restoreField = (
     } else {
         field.setValue(previousValue)
     }
+}
+
+// Style names for the style-unavailable note. Deliberately not
+// ExperienceConfirmation's VARIANT_LABELS, whose inline label ("Inline (embed
+// script) — no iframe") is written to label a radio, not to sit in a sentence.
+const VARIANT_NOUNS: Record<EmbedVariant, string> = {
+    fullHeight: 'Full height',
+    scrollable: 'Scrollable',
+    inline: 'Inline',
 }
 
 interface StateProps {
@@ -250,6 +259,13 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
     // meant for an unresolvable experience — see EmptyState's
     // saveError/resolveError split, which this mirrors.
     const [isSaveError, setIsSaveError] = useState(false)
+    // Set when refresh positively identified the stored style but the resolved
+    // model has no snippet in it — the stored code is kept and the author is
+    // told which style was unavailable. Held as the variant rather than a
+    // boolean so the note can name it. Kept apart from isRefreshError because
+    // the experience resolved fine, and from isSaveError because nothing was
+    // written.
+    const [styleUnavailable, setStyleUnavailable] = useState<EmbedVariant | null>(null)
 
     // State for the embed code
     const [embedCode, setEmbedCode] = useState(entry.fields[parameters.embedCodeFieldId].getValue())
@@ -274,57 +290,83 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
         return model
     }
 
-    // Identifies which variant is currently stored by matching the exact saved
-    // embed code against the model's available variants, rather than parsing
-    // markup — classifyEmbed only distinguishes inline/iframe/none, which isn't
-    // enough to tell scrollable from full-height.
+    // Identifies which variant is currently stored, so refresh can rewrite the
+    // entry in the style it was inserted with and "Change embed style" can
+    // preselect it. Three tiers, in descending order of certainty:
     //
-    // Without an exact match, the fallback is restricted to variants of the
-    // SAME embedKind the entry is actually stored as: an inline entry may only
-    // fall back to 'inline', and an iframe entry (full-height or scrollable)
-    // may only fall back to 'fullHeight' or 'scrollable' — never across the
-    // iframe/inline boundary. A cross-kind fallback would let a designed,
-    // transient resolveExperience response (`inlineUnavailable: true`, only an
-    // iframe key present — see functions/ceros-api.ts) silently rewrite an
-    // author's deliberate inline choice as an iframe snippet and report
-    // success, which is the exact silent-clobber this branch exists to
-    // eliminate. If nothing of the stored kind is available, the returned
-    // variant key is deliberately absent from the model so the caller's
-    // `model.embedCodes[currentVariant(model)]` resolves to undefined and its
-    // `if (!next) throw` fires — surfacing an error instead of a silent
-    // cross-kind rewrite.
-    const currentVariant = (model: ConfirmationModel): EmbedVariant => {
+    // 1. An exact match against the model's own codes — unambiguous.
+    // 2. classifyVariant on the stored markup. This is what makes a scrollable
+    //    entry identifiable at all: resolveExperience cannot offer every
+    //    variant the picker inserted from (the Flex manifest carries no
+    //    scrollable snippet, and Studio's oEmbed payload carries whichever
+    //    single variant the experience published with), so for those entries
+    //    tier 1 can never match and the markup is the only evidence left.
+    // 3. Only when the markup is genuinely unreadable, and only for an iframe
+    //    entry: accept the model's offer if it leaves no choice. One iframe
+    //    variant offered means one possible answer; two means we would be
+    //    guessing, so this returns null instead.
+    //
+    // null means "unknown" — callers must refuse to rewrite rather than guess.
+    // Guessing is what this replaced: preferring fullHeight whenever both
+    // iframe variants were absent from the comparison silently rewrote a
+    // deliberate Scrollable entry as Full height, and the same guess across the
+    // iframe/inline boundary would rewrite an inline entry as an iframe one
+    // whenever resolveExperience returned its designed degraded response
+    // (`inlineUnavailable: true`, only an iframe key present — see
+    // functions/ceros-api.ts).
+    const currentVariant = (model: ConfirmationModel): EmbedVariant | null => {
         const match = (Object.entries(model.embedCodes) as [EmbedVariant, string | undefined][]).find(
             ([, code]) => code === embedCode
         )
         if (match) return match[0]
 
-        if (embedKind === 'inline') return 'inline'
+        const identified = classifyVariant(embedCode)
+        if (identified) return identified
 
-        // Prefer fullHeight when both iframe variants are offered (matches the
-        // pre-existing preference elsewhere), but fall back to scrollable when
-        // the model only offers that — e.g. a scrollable-only Studio
-        // experience, which must keep resolving correctly.
-        return (['fullHeight', 'scrollable'] as const).find((v) => model.embedCodes[v]) ?? 'fullHeight'
+        // Gating on the kind rather than assuming it: classifyVariant answers
+        // every inline snippet, so an inline entry cannot reach this line
+        // today, and 'none' cannot either (the buttons that call this render
+        // only when the kind is not 'none'). The guard is what keeps a
+        // cross-kind rewrite impossible if either of those ever stops holding.
+        if (embedKind !== 'iframe') return null
+
+        const offered = (['fullHeight', 'scrollable'] as const).filter((v) => model.embedCodes[v])
+        return offered.length === 1 ? offered[0] : null
     }
 
-    // Refresh rewrites the embed code in the SAME variant it was stored in.
-    // classifyEmbed alone can't tell scrollable from full-height, so this uses
-    // currentVariant — the same lookup "Change embed style" uses to preselect
-    // — rather than guessing fullHeight ?? scrollable, which used to silently
-    // convert a deliberately-chosen Scrollable entry to full-height.
+    // Refresh rewrites the embed code in the SAME variant it was stored in, and
+    // rewrites nothing at all when it cannot get that variant — the one thing
+    // it must never do is hand back a different style and report success.
+    //
+    // Two distinct non-success outcomes, kept apart because they ask the author
+    // for different things: the style is unavailable (the experience is fine;
+    // Ceros just doesn't offer that snippet, which for a Flex Scrollable entry
+    // is permanent — see styleUnavailable), versus the variant is unknown (we
+    // cannot read the stored markup, which is a bug or a snippet shape we don't
+    // recognise, and is reported through isRefreshError).
     const refreshEmbedCode = async () => {
         setRefreshLoading(true)
         setIsRefreshError(false)
         setIsSaveError(false)
+        setStyleUnavailable(null)
         // Distinguishes a save failure (routed to isSaveError below) from every
         // other failure in this function (routed to isRefreshError), without
         // losing that distinction if the rollback setValue itself throws.
         let saveFailed = false
         try {
             const model = await resolveLinked()
-            const next = model.embedCodes[currentVariant(model)]
-            if (!next) throw new Error('No matching embed code was returned for this experience.')
+            const variant = currentVariant(model)
+            if (!variant) throw new Error('Could not determine which embed style this entry is stored in.')
+
+            const next = model.embedCodes[variant]
+            if (!next) {
+                // The experience resolved; it just has no snippet in this
+                // style. Leave the stored code alone and say so — this is not
+                // a failure of the experience, so it must not route to
+                // isRefreshError's "make sure it's still published" advice.
+                setStyleUnavailable(variant)
+                return
+            }
 
             // Capture the persisted value before writing the draft, so a failed
             // save can roll the in-memory field back instead of leaving the
@@ -358,6 +400,7 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
         setStyleLoading(true)
         setIsRefreshError(false)
         setIsSaveError(false)
+        setStyleUnavailable(null)
         try {
             setConfirming(await resolveLinked())
         } catch (err) {
@@ -375,6 +418,10 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
         // style change that just succeeded.
         setIsRefreshError(false)
         setIsSaveError(false)
+        // Also cleared here: the author has just chosen a style that IS
+        // available, so a note about the previous one being unavailable would
+        // linger over a successful change.
+        setStyleUnavailable(null)
         const previous = embedCode
         entry.fields[parameters.embedCodeFieldId].setValue(nextEmbedCode)
         try {
@@ -413,6 +460,19 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
                     <Note variant="negative">
                         Couldn't save this entry. Please try again. If the problem persists, refresh Contentful and
                         retry.
+                    </Note>
+                </Box>
+            )}
+
+            {styleUnavailable && (
+                <Box marginBottom="spacingXl">
+                    {/* One template literal rather than JSX interpolation, so
+                        the sentence stays a single text node and reads as one
+                        string to anything matching on it. */}
+                    <Note variant="warning">
+                        {`Ceros returned no ${VARIANT_NOUNS[styleUnavailable]} embed code for this experience, so the ` +
+                            `stored embed code was left unchanged. Use "Change embed style" to switch to a style ` +
+                            `Ceros can provide.`}
                     </Note>
                 </Box>
             )}
@@ -470,7 +530,10 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
                     {confirming ? (
                         <ExperienceConfirmation
                             model={confirming}
-                            initialVariant={currentVariant(confirming)}
+                            // undefined, not null: an unidentifiable stored
+                            // style means "no preselection", which is exactly
+                            // ExperienceConfirmation's default-variant path.
+                            initialVariant={currentVariant(confirming) ?? undefined}
                             onInsert={(nextEmbedCode) => applyStyle(nextEmbedCode)}
                             onBack={() => setConfirming(null)}
                             insertLabel="Use this style"

@@ -519,10 +519,15 @@ describe('Entry — LinkedState refresh and embed style', () => {
         // Designed, transient shape: resolveExperience falls back to fullHeight
         // and flags inlineUnavailable when the Flex manifest can't be read (see
         // functions/ceros-api.ts). An inline entry refreshed against this
-        // response has no exact match and no inline key to fall back to — the
-        // fallback must stay within the inline kind and surface an error
-        // rather than silently rewriting the author's inline choice as iframe
-        // HTML.
+        // response has no exact match and no inline key to fall back to — it
+        // must report that the style is unavailable and leave the stored code
+        // alone, rather than silently rewriting the author's inline choice as
+        // iframe HTML.
+        //
+        // The note is the style-unavailable one, NOT the refresh/unlink error:
+        // the experience resolved fine here, so telling the author to check
+        // that it is still published and to unlink and relink would send them
+        // after a problem they do not have.
         mockCallCerosAction.mockResolvedValue({
             data: {
                 isFlex: true,
@@ -536,9 +541,82 @@ describe('Entry — LinkedState refresh and embed style', () => {
 
         fireEvent.click(screen.getByRole('button', { name: /refresh embed code/i }))
 
-        await waitFor(() => expect(screen.getByText(/error refreshing/i)).toBeInTheDocument())
+        await waitFor(() => expect(screen.getByText(/no Inline embed code/i)).toBeInTheDocument())
+        expect(screen.queryByText(/error refreshing/i)).not.toBeInTheDocument()
         expect(sdk.entry.fields.embedCode.setValue).not.toHaveBeenCalledWith(IFRAME_SNIPPET)
         expect(sdk.entry.save).not.toHaveBeenCalled()
+    })
+
+    it('leaves a Flex Scrollable entry untouched when the resolved model carries no scrollable snippet', async () => {
+        // The review case, and the DEFAULT for Flex rather than an edge: the
+        // picker can always insert Scrollable for Flex, but resolveExperience
+        // can never return a scrollable snippet for one — the manifest has no
+        // scrollable delivery mode and Flex oEmbed is full-height only. Refresh
+        // used to fall back to fullHeight here and report success, silently
+        // converting a deliberate Scrollable entry to Full height.
+        const FLEX_SCROLLABLE =
+            '<div data-embed-width="100%" data-embed-height="800px" data-ceros-experience="https://myaccount.ceros.site/flex-experience"></div>\n' +
+            '<script src="https://assets.ceros.site/js/embed.v1.js"></script>'
+        mockCallCerosAction.mockResolvedValue({ data: RESOLVED })
+        await renderLinked(FLEX_SCROLLABLE)
+
+        fireEvent.click(screen.getByRole('button', { name: /refresh embed code/i }))
+
+        await waitFor(() => expect(screen.getByText(/no Scrollable embed code/i)).toBeInTheDocument())
+        expect(sdk.entry.fields.embedCode.setValue).not.toHaveBeenCalled()
+        expect(sdk.entry.save).not.toHaveBeenCalled()
+        expect(screen.queryByText(/error refreshing/i)).not.toBeInTheDocument()
+    })
+
+    it('leaves a Flex Full height entry untouched when the resolved model carries only an inline snippet', async () => {
+        // Reachable degraded shape: a manifest can expose an inline delivery
+        // mode and no iframe one, so resolveExperience returns inline alone.
+        // The stored full-height snippet is still identifiable from its own
+        // markup, so refresh must name Full height as the unavailable style and
+        // keep the stored code — the old preference-order fallback reported the
+        // publish/unlink error here instead, which describes a problem this
+        // entry does not have.
+        const FLEX_FULL_HEIGHT =
+            '<div data-embed-width="100%" data-embed-height="auto" data-ceros-experience="https://myaccount.ceros.site/flex-experience"></div>\n' +
+            '<script src="https://assets.ceros.site/js/embed.v1.js"></script>'
+        mockCallCerosAction.mockResolvedValue({
+            data: {
+                isFlex: true,
+                name: 'Fifth Brass Storm',
+                url: 'https://myaccount.ceros.site/flex-experience',
+                embedCodes: { inline: INLINE_SNIPPET },
+            },
+        })
+        await renderLinked(FLEX_FULL_HEIGHT)
+
+        fireEvent.click(screen.getByRole('button', { name: /refresh embed code/i }))
+
+        await waitFor(() => expect(screen.getByText(/no Full height embed code/i)).toBeInTheDocument())
+        expect(sdk.entry.fields.embedCode.setValue).not.toHaveBeenCalled()
+        expect(sdk.entry.save).not.toHaveBeenCalled()
+        expect(screen.queryByText(/error refreshing/i)).not.toBeInTheDocument()
+    })
+
+    it('refreshes a Scrollable entry by its markup when both iframe variants are offered and neither matches byte-for-byte', async () => {
+        // Pins "identify the stored style from the markup, never from a
+        // preference order". Nothing on the wire offers both iframe variants
+        // today, but a scrollable-capable resolve path would, and this is the
+        // exact shape in which the old fallback silently chose fullHeight.
+        const STORED_SCROLLABLE =
+            '<div data-embed-width="100%" data-embed-height="800px" data-ceros-experience="https://myaccount.ceros.site/flex-experience"></div>'
+        const NEW_FULL_HEIGHT =
+            '<div data-embed-width="100%" data-embed-height="auto" data-ceros-experience="https://myaccount.ceros.site/flex-experience" data-republished="true"></div>'
+        const NEW_SCROLLABLE =
+            '<div data-embed-width="100%" data-embed-height="800px" data-ceros-experience="https://myaccount.ceros.site/flex-experience" data-republished="true"></div>'
+        mockCallCerosAction.mockResolvedValue({
+            data: { ...RESOLVED, embedCodes: { fullHeight: NEW_FULL_HEIGHT, scrollable: NEW_SCROLLABLE } },
+        })
+        await renderLinked(STORED_SCROLLABLE)
+
+        fireEvent.click(screen.getByRole('button', { name: /refresh embed code/i }))
+
+        await waitFor(() => expect(sdk.entry.fields.embedCode.setValue).toHaveBeenCalledWith(NEW_SCROLLABLE))
+        expect(sdk.entry.fields.embedCode.setValue).not.toHaveBeenCalledWith(NEW_FULL_HEIGHT)
     })
 
     it('rolls back the in-memory draft when a refresh save fails, showing the save-failure note', async () => {
@@ -595,6 +673,50 @@ describe('Entry — LinkedState refresh and embed style', () => {
         expect(screen.queryByText(/couldn't save this entry/i)).not.toBeInTheDocument()
     })
 })
+
+describe('Entry — EmptyState trims the pasted URL', () => {
+    let sdk: ReturnType<typeof makeMockSdk>
+
+    beforeEach(() => {
+        vi.clearAllMocks()
+        sdk = makeMockSdk()
+        mockUseSDK.mockReturnValue(sdk as any)
+        mockFindCerosActionId.mockResolvedValue('action-1')
+    })
+
+    const pasteAndSubmit = async (url: string) => {
+        render(<Entry />)
+        const input = await screen.findByPlaceholderText(/https:\/\/account\.ceros\.site\//i)
+        fireEvent.change(input, { target: { value: url } })
+        fireEvent.submit(input.closest('form')!)
+    }
+
+    it('sends a trimmed URL to the function', async () => {
+        mockCallCerosAction.mockResolvedValue({
+            data: {
+                isFlex: true, name: 'Fifth Brass Storm',
+                url: 'https://myaccount.ceros.site/flex-experience',
+                embedCodes: { fullHeight: '<iframe></iframe>' },
+            },
+        })
+
+        await pasteAndSubmit('  https://myaccount.ceros.site/flex-experience\n')
+
+        await waitFor(() => expect(mockCallCerosAction).toHaveBeenCalled())
+        expect(mockCallCerosAction).toHaveBeenCalledWith(expect.anything(), 'action-1', {
+            action: 'resolveExperience',
+            url: 'https://myaccount.ceros.site/flex-experience',
+        })
+    })
+
+    it('rejects a whitespace-only paste without calling the function', async () => {
+        await pasteAndSubmit('   ')
+
+        await waitFor(() => expect(screen.getByText(/experience URL is invalid/i)).toBeInTheDocument())
+        expect(mockCallCerosAction).not.toHaveBeenCalled()
+    })
+})
+
 
 describe('Entry — EmptyState trims the pasted URL', () => {
     let sdk: ReturnType<typeof makeMockSdk>
