@@ -36,6 +36,32 @@ export function parseCerosUrl(experienceUrl: string): URL | null {
     return null
 }
 
+// The hosts this app can resolve without any discovery step: a URL on one of them
+// goes straight to resolveExperience, which HEADs it and reads x-flex-manifest.
+// Kept separate from parseCerosUrl because that function also enforces the path
+// shape oEmbed needs, and the paste box only needs to know "is discovery required".
+export function isKnownCerosHost(experienceUrl: string): boolean {
+    try {
+        const { hostname } = new URL(experienceUrl.trim())
+        return hostname === 'view.ceros.com' || hostname.endsWith('.ceros.site')
+    } catch {
+        return false
+    }
+}
+
+// The paste box's pre-filter. Deliberately loose: any https URL is worth trying,
+// because a vanity domain is an arbitrary customer host and nothing about its name
+// says whether it fronts a Ceros experience. This only rejects input that cannot be
+// a web address at all, so the specific "not a Ceros experience" message comes from
+// the resolution attempt rather than from a hostname guess.
+export function isPasteableUrl(experienceUrl: string): boolean {
+    try {
+        return new URL(experienceUrl.trim()).protocol === 'https:'
+    } catch {
+        return false
+    }
+}
+
 export async function getExperienceMetadata(experienceUrl: string): Promise<OembedMetadata | null> {
     const url = parseCerosUrl(experienceUrl)
 

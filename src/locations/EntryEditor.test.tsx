@@ -11,6 +11,10 @@ vi.mock('../oembed', async (importOriginal) => ({
     getExperienceMetadata: vi.fn(),
 }))
 
+vi.mock('../vanity', () => ({
+    resolveVanityToCanonical: vi.fn().mockResolvedValue(null),
+}))
+
 vi.mock('../ceros-action', () => ({
     findCerosActionId: vi.fn(),
     callCerosAction: vi.fn(),
@@ -18,11 +22,13 @@ vi.mock('../ceros-action', () => ({
 
 import { useSDK } from '@contentful/react-apps-toolkit'
 import { callCerosAction, findCerosActionId } from '../ceros-action'
+import { resolveVanityToCanonical } from '../vanity'
 import Entry from './EntryEditor'
 
 const mockUseSDK = vi.mocked(useSDK)
 const mockFindCerosActionId = vi.mocked(findCerosActionId)
 const mockCallCerosAction = vi.mocked(callCerosAction)
+const mockResolveVanity = vi.mocked(resolveVanityToCanonical)
 
 const baseParameters = {
     contentTypeId: 'cerosExperience',
@@ -126,16 +132,32 @@ describe('Entry — EmptyState (no linked experience)', () => {
         })
     })
 
-    it('shows a validation error when the pasted URL is not a recognized Ceros host', async () => {
+    it('shows a validation error when the pasted value is not an https URL', async () => {
         render(<Entry />)
 
         const input = await screen.findByPlaceholderText(/https:\/\/account\.ceros\.site\//i)
-        fireEvent.change(input, { target: { value: 'https://invalid.url' } })
+        fireEvent.change(input, { target: { value: 'not-a-url' } })
         fireEvent.submit(input.closest('form')!)
 
         await waitFor(() => {
-            expect(screen.getByText(/The experience URL is invalid/i)).toBeInTheDocument()
+            expect(screen.getByText(/Enter a full experience URL/i)).toBeInTheDocument()
         })
+    })
+
+    // An unknown host is no longer rejected on its name — a vanity domain is an
+    // arbitrary customer host — so it is attempted and reported on the outcome.
+    it('reports an unresolvable host after attempting vanity resolution', async () => {
+        mockResolveVanity.mockResolvedValue(null)
+        render(<Entry />)
+
+        const input = await screen.findByPlaceholderText(/https:\/\/account\.ceros\.site\//i)
+        fireEvent.change(input, { target: { value: 'https://invalid.url/thing' } })
+        fireEvent.submit(input.closest('form')!)
+
+        await waitFor(() => {
+            expect(screen.getByText(/couldn't find a published Ceros experience/i)).toBeInTheDocument()
+        })
+        expect(mockResolveVanity).toHaveBeenCalledWith('https://invalid.url/thing')
     })
 })
 
@@ -282,11 +304,41 @@ describe('Entry — EmptyState paste flow', () => {
         expect(screen.getByText('Fifth Brass Storm')).toBeInTheDocument()
     })
 
-    it('rejects a non-Ceros host before calling the function', async () => {
+    it('never reaches the function when a non-Ceros host cannot be resolved', async () => {
+        mockResolveVanity.mockResolvedValue(null)
+
         await pasteAndSubmit('https://example.com/not-ceros')
 
-        await waitFor(() => expect(screen.getByText(/experience URL is invalid/i)).toBeInTheDocument())
+        await waitFor(() =>
+            expect(screen.getByText(/couldn't find a published Ceros experience/i)).toBeInTheDocument()
+        )
         expect(mockCallCerosAction).not.toHaveBeenCalled()
+    })
+
+    it('resolves a vanity URL to its canonical URL before calling the function', async () => {
+        mockResolveVanity.mockResolvedValue('https://myaccount.ceros.site/flex-experience')
+        mockCallCerosAction.mockResolvedValue({ data: FLEX_MODEL })
+
+        await pasteAndSubmit('https://look.example.com/flex-experience')
+
+        await waitFor(() => expect(mockCallCerosAction).toHaveBeenCalled())
+        // The function only ever sees the canonical URL — it cannot fetch the vanity
+        // host at all, which is the whole reason the translation happens in the browser.
+        expect(mockCallCerosAction).toHaveBeenCalledWith(expect.anything(), 'action-1', {
+            action: 'resolveExperience',
+            url: 'https://myaccount.ceros.site/flex-experience',
+        })
+    })
+
+    it('does not attempt vanity resolution for a known Ceros host', async () => {
+        mockCallCerosAction.mockResolvedValue({ data: FLEX_MODEL })
+
+        await pasteAndSubmit('https://myaccount.ceros.site/flex-experience')
+
+        await waitFor(() => expect(mockCallCerosAction).toHaveBeenCalled())
+        // The known-host path must stay request-for-request what it was before vanity
+        // domains existed: no manifest probe for view.ceros.com or *.ceros.site.
+        expect(mockResolveVanity).not.toHaveBeenCalled()
     })
 })
 
@@ -712,7 +764,7 @@ describe('Entry — EmptyState trims the pasted URL', () => {
     it('rejects a whitespace-only paste without calling the function', async () => {
         await pasteAndSubmit('   ')
 
-        await waitFor(() => expect(screen.getByText(/experience URL is invalid/i)).toBeInTheDocument())
+        await waitFor(() => expect(screen.getByText(/Enter a full experience URL/i)).toBeInTheDocument())
         expect(mockCallCerosAction).not.toHaveBeenCalled()
     })
 })
@@ -756,7 +808,7 @@ describe('Entry — EmptyState trims the pasted URL', () => {
     it('rejects a whitespace-only paste without calling the function', async () => {
         await pasteAndSubmit('   ')
 
-        await waitFor(() => expect(screen.getByText(/experience URL is invalid/i)).toBeInTheDocument())
+        await waitFor(() => expect(screen.getByText(/Enter a full experience URL/i)).toBeInTheDocument())
         expect(mockCallCerosAction).not.toHaveBeenCalled()
     })
 })

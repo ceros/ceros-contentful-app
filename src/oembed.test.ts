@@ -6,7 +6,13 @@ vi.mock('@extractus/oembed-extractor', () => ({
 }))
 
 import { extract, setProviderList } from '@extractus/oembed-extractor'
-import { getExperienceMetadata, parseCerosUrl, OembedMetadata } from './oembed'
+import {
+    getExperienceMetadata,
+    isKnownCerosHost,
+    isPasteableUrl,
+    parseCerosUrl,
+    OembedMetadata,
+} from './oembed'
 
 const mockExtract = vi.mocked(extract)
 const mockSetProviderList = vi.mocked(setProviderList)
@@ -199,5 +205,58 @@ describe('getExperienceMetadata', () => {
             expect(result?.url).toBe('https://view.ceros.com/account/experience')
         })
 
+    })
+})
+
+describe('isKnownCerosHost', () => {
+    it.each([
+        'https://view.ceros.com/account/experience',
+        'https://myaccount.ceros.site/experience',
+        'https://myaccount.ceros.site/experience/page-2',
+        // The path shape is irrelevant here: this answers "does this host need
+        // discovery", not "is this a well-formed oEmbed target".
+        'https://view.ceros.com/account',
+    ])('recognises %s', (url) => {
+        expect(isKnownCerosHost(url)).toBe(true)
+    })
+
+    it.each([
+        ['a vanity domain', 'https://look.example.com/experience'],
+        ['a lookalike suffix', 'https://ceros.site.example.com/experience'],
+        ['an unrelated host', 'https://example.com/foo'],
+        ['a non-URL', 'not-a-url'],
+    ])('does not recognise %s', (_label, url) => {
+        expect(isKnownCerosHost(url)).toBe(false)
+    })
+
+    it('tolerates surrounding whitespace', () => {
+        expect(isKnownCerosHost('  https://myaccount.ceros.site/experience\n')).toBe(true)
+    })
+})
+
+describe('isPasteableUrl', () => {
+    // Deliberately loose: a vanity domain is an arbitrary customer host, so the
+    // hostname cannot decide whether the URL is worth trying. This only rejects
+    // input that is not an https address at all.
+    it.each([
+        'https://look.example.com/experience',
+        'https://example.com',
+        'https://myaccount.ceros.site/experience',
+    ])('accepts %s', (url) => {
+        expect(isPasteableUrl(url)).toBe(true)
+    })
+
+    it.each([
+        ['a non-URL', 'not-a-url'],
+        ['an empty string', ''],
+        ['whitespace only', '   '],
+        ['http', 'http://look.example.com/experience'],
+        ['a non-web scheme', 'javascript:alert(1)'],
+    ])('rejects %s', (_label, url) => {
+        expect(isPasteableUrl(url)).toBe(false)
+    })
+
+    it('tolerates surrounding whitespace', () => {
+        expect(isPasteableUrl('  https://look.example.com/experience\n')).toBe(true)
     })
 })

@@ -14,7 +14,8 @@ import React, { Dispatch, useEffect, useState } from 'react'
 
 import cerosLogo from '../assets/ceros-logo.svg'
 import styles from '../styles'
-import { parseCerosUrl } from '../oembed'
+import { isKnownCerosHost, isPasteableUrl } from '../oembed'
+import { resolveVanityToCanonical } from '../vanity'
 import { AppInstallationParameters } from './ConfigScreen'
 import tokens from '@contentful/f36-tokens'
 import { ExperiencePicker, SelectedExperience } from './ExperiencePicker'
@@ -50,6 +51,16 @@ const VARIANT_NOUNS: Record<EmbedVariant, string> = {
     scrollable: 'Scrollable',
     inline: 'Inline',
 }
+
+// resolveVanityToCanonical returns null for every case it cannot read, and a vanity
+// host exposes nothing that would let us tell those cases apart: a Studio experience
+// served there has no manifest, and neither does a site that isn't Ceros at all. So
+// one message has to cover both, and it names the Studio case explicitly because that
+// is the one an actual Ceros customer will hit.
+const UNRECOGNISED_URL_ERROR =
+    "We couldn't find a published Ceros experience at that URL. If it's a Studio experience on a " +
+    'custom domain, paste its view.ceros.com URL instead — custom domains are currently supported ' +
+    'for Flex experiences only.'
 
 interface StateProps {
     entry: EntryAPI
@@ -114,18 +125,34 @@ function EmptyState({ entry, setLinked, parameters }: StateProps) {
         // string — sees the same clean value.
         const url = rawUrl.trim()
 
-        // Keep the existing host allowlist as a cheap pre-filter. It no longer
-        // decides Flex vs Studio — the function's HEAD does that — it only keeps
-        // obviously non-Ceros URLs from reaching the function.
-        if (!parseCerosUrl(url)) {
+        // The pre-filter can only reject input that isn't an https URL at all. It
+        // deliberately does NOT check the hostname any more: a vanity domain is an
+        // arbitrary customer host, so its name says nothing about whether it fronts a
+        // Ceros experience. That question is settled by actually trying to resolve it.
+        if (!isPasteableUrl(url)) {
             setIsCerosExperienceInvalid(true)
             return
         }
 
         setLoading(true)
         try {
+            // A known Ceros host needs no discovery — resolveExperience HEADs it and
+            // reads x-flex-manifest itself — so this path stays request-for-request
+            // what it was before vanity domains existed. Anything else is translated
+            // to its canonical URL first, in the browser, because the function cannot
+            // fetch an arbitrary host at all (allowNetworks cannot express one).
+            let resolvableUrl = url
+            if (!isKnownCerosHost(url)) {
+                const canonicalUrl = await resolveVanityToCanonical(url)
+                if (!canonicalUrl) throw new Error(UNRECOGNISED_URL_ERROR)
+                resolvableUrl = canonicalUrl
+            }
+
             const actionId = await findCerosActionId(sdk)
-            const res = await callCerosAction(sdk, actionId, { action: 'resolveExperience', url })
+            const res = await callCerosAction(sdk, actionId, {
+                action: 'resolveExperience',
+                url: resolvableUrl,
+            })
             if (res.error) throw new Error(String(res.error))
 
             const d = res.data as ConfirmationModel
@@ -198,8 +225,7 @@ function EmptyState({ entry, setLinked, parameters }: StateProps) {
                             />
                             {isCerosExperienceInvalid && (
                                 <FormControl.ValidationMessage>
-                                    The experience URL is invalid. Make sure it looks like
-                                    'https://account.ceros.site/experience' or 'https://view.ceros.com/account/experience' and that the experience is published.
+                                    Enter a full experience URL beginning with https://
                                 </FormControl.ValidationMessage>
                             )}
                         </FormControl>
