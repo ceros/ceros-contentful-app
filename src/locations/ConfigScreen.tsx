@@ -1,5 +1,5 @@
 import { ConfigAppSDK } from '@contentful/app-sdk'
-import { Box, Checkbox, Flex, Form, FormControl, Heading, Note, Paragraph, Select } from '@contentful/f36-components'
+import { Box, Checkbox, Flex, Form, FormControl, Heading, Note, Paragraph, Select, TextInput } from '@contentful/f36-components'
 import { useSDK } from '@contentful/react-apps-toolkit'
 import { css } from '@emotion/css'
 import { ContentTypeProps } from 'contentful-management'
@@ -16,6 +16,7 @@ export interface AppInstallationParameters {
     titleFieldId: string
     urlFieldId: string
     embedCodeFieldId: string
+    cerosApiKey?: string
 }
 
 const ConfigScreen = () => {
@@ -36,6 +37,7 @@ const ConfigScreen = () => {
         titleFieldId: '',
         urlFieldId: '',
         embedCodeFieldId: '',
+        cerosApiKey: '',
     })
 
     useEffect(() => {
@@ -298,6 +300,17 @@ const ConfigScreen = () => {
                                 ))}
                         </Select>
                         <FormControl.HelpText>This field needs to be of the type "Text".</FormControl.HelpText>
+                    </FormControl>
+
+                    <FormControl>
+                        <FormControl.Label>Ceros API Key</FormControl.Label>
+                        <TextInput
+                            type="password"
+                            value={parameters.cerosApiKey ?? ''}
+                            placeholder="Enter your Ceros REST API key"
+                            onChange={(e) => setParameters((p) => ({ ...p, cerosApiKey: e.target.value }))}
+                        />
+                        <FormControl.HelpText>Contact your Ceros account owner to get your REST API key.</FormControl.HelpText>
                     </FormControl>
                 </Form>
             </Box>

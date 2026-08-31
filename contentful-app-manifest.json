@@ -1,0 +1,13 @@
+{
+  "functions": [
+    {
+      "id": "CerosApi",
+      "name": "CerosApi",
+      "description": "Fetches experiences from the Ceros REST API using a securely stored API key.",
+      "path": "functions/ceros-api.js",
+      "entryFile": "functions/ceros-api.ts",
+      "allowNetworks": ["rest.ceros.com", "*.ceros.site", "view.ceros.com"],
+      "accepts": ["appaction.call"]
+    }
+  ]
+}

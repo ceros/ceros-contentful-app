@@ -6,7 +6,13 @@ vi.mock('@extractus/oembed-extractor', () => ({
 }))
 
 import { extract, setProviderList } from '@extractus/oembed-extractor'
-import { getExperienceMetadata, parseCerosUrl, OembedMetadata } from './oembed'
+import {
+    getExperienceMetadata,
+    isKnownCerosHost,
+    isPasteableUrl,
+    parseCerosUrl,
+    OembedMetadata,
+} from './oembed'
 
 const mockExtract = vi.mocked(extract)
 const mockSetProviderList = vi.mocked(setProviderList)
@@ -25,38 +31,58 @@ const baseMetadata: OembedMetadata = {
 }
 
 describe('parseCerosUrl', () => {
-    it('returns null for a non-parseable string', () => {
-        expect(parseCerosUrl('not-a-url')).toBeNull()
+    describe('invalid inputs', () => {
+        it('returns null for a non-parseable string', () => {
+            expect(parseCerosUrl('not-a-url')).toBeNull()
+        })
+
+        it('returns null for an empty string', () => {
+            expect(parseCerosUrl('')).toBeNull()
+        })
+
+        it('returns null for a non-Ceros domain', () => {
+            expect(parseCerosUrl('https://example.com/account/experience')).toBeNull()
+        })
+
+        it('returns null for an http Ceros URL', () => {
+            expect(parseCerosUrl('http://view.ceros.com/account/experience')).toBeNull()
+        })
+
+        it('returns null for a view.ceros.com URL missing the experience path segment', () => {
+            expect(parseCerosUrl('https://view.ceros.com/account')).toBeNull()
+        })
     })
 
-    it('returns null for an empty string', () => {
-        expect(parseCerosUrl('')).toBeNull()
+    describe('valid view.ceros.com URLs', () => {
+        it('returns a URL for a valid view.ceros.com URL', () => {
+            const url = parseCerosUrl('https://view.ceros.com/account/experience')
+            expect(url).toBeInstanceOf(URL)
+            expect(url?.hostname).toBe('view.ceros.com')
+        })
+
+        it('returns a URL for a URL with underscores in path segments', () => {
+            const url = parseCerosUrl('https://view.ceros.com/my_account/my_experience')
+            expect(url).toBeInstanceOf(URL)
+        })
+
+        it('returns a URL for a URL with hyphens in path segments', () => {
+            const url = parseCerosUrl('https://view.ceros.com/my-account/my-experience')
+            expect(url).toBeInstanceOf(URL)
+        })
+
+        it('returns a URL that preserves query params and hash for downstream use', () => {
+            const url = parseCerosUrl('https://view.ceros.com/account/experience?foo=bar#section')
+            expect(url?.search).toBe('?foo=bar')
+            expect(url?.hash).toBe('#section')
+        })
     })
 
-    it('returns null for a non-Ceros domain', () => {
-        expect(parseCerosUrl('https://example.com/account/experience')).toBeNull()
-    })
-
-    it('returns null for an http Ceros URL', () => {
-        expect(parseCerosUrl('http://view.ceros.com/account/experience')).toBeNull()
-    })
-
-    it('returns a URL for a valid view.ceros.com URL', () => {
-        const url = parseCerosUrl('https://view.ceros.com/account/experience')
-        expect(url).toBeInstanceOf(URL)
-        expect(url?.hostname).toBe('view.ceros.com')
-    })
-
-    it('returns a URL for a valid *.ceros.site URL', () => {
-        const url = parseCerosUrl('https://myaccount.ceros.site/experience')
-        expect(url).toBeInstanceOf(URL)
-        expect(url?.hostname).toBe('myaccount.ceros.site')
-    })
-
-    it('returns a URL that preserves query params and hash for downstream use', () => {
-        const url = parseCerosUrl('https://view.ceros.com/account/experience?foo=bar#section')
-        expect(url?.search).toBe('?foo=bar')
-        expect(url?.hash).toBe('#section')
+    describe('valid *.ceros.site URLs', () => {
+        it('returns a URL for a valid *.ceros.site URL', () => {
+            const url = parseCerosUrl('https://myaccount.ceros.site/experience')
+            expect(url).toBeInstanceOf(URL)
+            expect(url?.hostname).toBe('myaccount.ceros.site')
+        })
     })
 })
 
@@ -67,45 +93,10 @@ describe('getExperienceMetadata', () => {
     })
 
     describe('URL validation', () => {
-        it('returns null for non-Ceros URLs', async () => {
-            const result = await getExperienceMetadata('https://example.com/page')
+        it('returns null without calling extract for an invalid URL', async () => {
+            const result = await getExperienceMetadata('https://notceros.com/foo/bar')
+            expect(mockExtract).not.toHaveBeenCalled()
             expect(result).toBeNull()
-        })
-
-        it('returns null for plain strings', async () => {
-            const result = await getExperienceMetadata('not-a-url')
-            expect(result).toBeNull()
-        })
-
-        it('returns null for http (non-https) Ceros URLs', async () => {
-            const result = await getExperienceMetadata('http://view.ceros.com/account/experience')
-            expect(result).toBeNull()
-        })
-
-        it('returns null for empty string', async () => {
-            const result = await getExperienceMetadata('')
-            expect(result).toBeNull()
-        })
-
-        it('accepts valid view.ceros.com URLs', async () => {
-            const result = await getExperienceMetadata('https://view.ceros.com/account/experience')
-            expect(result).not.toBeNull()
-        })
-
-        it('accepts valid *.ceros.site URLs', async () => {
-            mockExtract.mockResolvedValue({ ...baseMetadata, url: 'https://myaccount.ceros.site/experience' })
-            const result = await getExperienceMetadata('https://myaccount.ceros.site/experience')
-            expect(result).not.toBeNull()
-        })
-
-        it('accepts view.ceros.com URLs with underscores in path segments', async () => {
-            const result = await getExperienceMetadata('https://view.ceros.com/my_account/my_experience')
-            expect(result).not.toBeNull()
-        })
-
-        it('accepts view.ceros.com URLs with hyphens in path segments', async () => {
-            const result = await getExperienceMetadata('https://view.ceros.com/my-account/my-experience')
-            expect(result).not.toBeNull()
         })
     })
 
@@ -126,13 +117,13 @@ describe('getExperienceMetadata', () => {
         })
 
         it('preserves the full path for *.ceros.site URLs', async () => {
-            mockExtract.mockResolvedValue({ ...baseMetadata, url: 'https://myaccount.ceros.site/experience' })
+            mockExtract.mockResolvedValue({ ...baseMetadata, url: 'https://myaccount.ceros.site/experience' } as OembedMetadata)
             await getExperienceMetadata('https://myaccount.ceros.site/experience/page/2')
             expect(mockExtract).toHaveBeenCalledWith('https://myaccount.ceros.site/experience/page/2')
         })
 
         it('strips query strings from *.ceros.site URLs', async () => {
-            mockExtract.mockResolvedValue({ ...baseMetadata, url: 'https://myaccount.ceros.site/experience' })
+            mockExtract.mockResolvedValue({ ...baseMetadata, url: 'https://myaccount.ceros.site/experience' } as OembedMetadata)
             await getExperienceMetadata('https://myaccount.ceros.site/experience?mobile=true')
             expect(mockExtract).toHaveBeenCalledWith('https://myaccount.ceros.site/experience')
         })
@@ -145,10 +136,12 @@ describe('getExperienceMetadata', () => {
                 expect.arrayContaining([
                     expect.objectContaining({
                         provider_name: 'Ceros',
+                        provider_url: 'https://www.ceros.com/',
                         endpoints: expect.arrayContaining([
                             expect.objectContaining({
                                 schemes: ['https://view.ceros.com/*'],
                                 url: 'https://view.ceros.com/oembed',
+                                discovery: true,
                             }),
                         ]),
                     }),
@@ -157,16 +150,18 @@ describe('getExperienceMetadata', () => {
         })
 
         it('configures the account subdomain as oembed provider for *.ceros.site URLs', async () => {
-            mockExtract.mockResolvedValue({ ...baseMetadata, url: 'https://myaccount.ceros.site/experience' })
+            mockExtract.mockResolvedValue({ ...baseMetadata, url: 'https://myaccount.ceros.site/experience' } as OembedMetadata)
             await getExperienceMetadata('https://myaccount.ceros.site/experience')
             expect(mockSetProviderList).toHaveBeenCalledWith(
                 expect.arrayContaining([
                     expect.objectContaining({
                         provider_name: 'Ceros',
+                        provider_url: 'https://www.ceros.com/',
                         endpoints: expect.arrayContaining([
                             expect.objectContaining({
                                 schemes: ['https://myaccount.ceros.site/*'],
                                 url: 'https://myaccount.ceros.site/oembed',
+                                discovery: true,
                             }),
                         ]),
                     }),
@@ -176,7 +171,7 @@ describe('getExperienceMetadata', () => {
 
         it('always calls setProviderList before extract', async () => {
             const callOrder: string[] = []
-            mockSetProviderList.mockImplementation(() => { callOrder.push('setProviderList') })
+            mockSetProviderList.mockImplementation(() => { callOrder.push('setProviderList'); return 0 })
             mockExtract.mockImplementation(async () => { callOrder.push('extract'); return baseMetadata })
 
             await getExperienceMetadata('https://view.ceros.com/account/experience')
@@ -205,15 +200,63 @@ describe('getExperienceMetadata', () => {
         })
 
         it('preserves the url from metadata when it is already set', async () => {
-            mockExtract.mockResolvedValue({ ...baseMetadata, url: 'https://view.ceros.com/account/experience' })
+            mockExtract.mockResolvedValue({ ...baseMetadata, url: 'https://view.ceros.com/account/experience' } as OembedMetadata)
             const result = await getExperienceMetadata('https://view.ceros.com/account/experience')
             expect(result?.url).toBe('https://view.ceros.com/account/experience')
         })
 
-        it('returns null for invalid URL without calling extract', async () => {
-            const result = await getExperienceMetadata('https://notceros.com/foo/bar')
-            expect(mockExtract).not.toHaveBeenCalled()
-            expect(result).toBeNull()
-        })
+    })
+})
+
+describe('isKnownCerosHost', () => {
+    it.each([
+        'https://view.ceros.com/account/experience',
+        'https://myaccount.ceros.site/experience',
+        'https://myaccount.ceros.site/experience/page-2',
+        // The path shape is irrelevant here: this answers "does this host need
+        // discovery", not "is this a well-formed oEmbed target".
+        'https://view.ceros.com/account',
+    ])('recognises %s', (url) => {
+        expect(isKnownCerosHost(url)).toBe(true)
+    })
+
+    it.each([
+        ['a vanity domain', 'https://look.example.com/experience'],
+        ['a lookalike suffix', 'https://ceros.site.example.com/experience'],
+        ['an unrelated host', 'https://example.com/foo'],
+        ['a non-URL', 'not-a-url'],
+    ])('does not recognise %s', (_label, url) => {
+        expect(isKnownCerosHost(url)).toBe(false)
+    })
+
+    it('tolerates surrounding whitespace', () => {
+        expect(isKnownCerosHost('  https://myaccount.ceros.site/experience\n')).toBe(true)
+    })
+})
+
+describe('isPasteableUrl', () => {
+    // Deliberately loose: a vanity domain is an arbitrary customer host, so the
+    // hostname cannot decide whether the URL is worth trying. This only rejects
+    // input that is not an https address at all.
+    it.each([
+        'https://look.example.com/experience',
+        'https://example.com',
+        'https://myaccount.ceros.site/experience',
+    ])('accepts %s', (url) => {
+        expect(isPasteableUrl(url)).toBe(true)
+    })
+
+    it.each([
+        ['a non-URL', 'not-a-url'],
+        ['an empty string', ''],
+        ['whitespace only', '   '],
+        ['http', 'http://look.example.com/experience'],
+        ['a non-web scheme', 'javascript:alert(1)'],
+    ])('rejects %s', (_label, url) => {
+        expect(isPasteableUrl(url)).toBe(false)
+    })
+
+    it('tolerates surrounding whitespace', () => {
+        expect(isPasteableUrl('  https://look.example.com/experience\n')).toBe(true)
     })
 })
