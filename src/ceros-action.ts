@@ -16,16 +16,20 @@ export interface CerosActionResult {
 }
 
 export const CEROS_ACTION_MISSING_ERROR =
-    'The CerosApi App Action is not set up. Run "npm run create-app-action" after deploying.'
+    'The CerosApi App Action is not set up. Run "npm run upsert-actions" after deploying.'
 
-// Looks up the CerosApi App Action's id. The id is per-installation, so it has
-// to be resolved at runtime rather than configured.
+// The id pinned in contentful-app-manifest.json, which `npm run upsert-actions` upserts.
+export const CEROS_ACTION_ID = 'cerosApi'
+
+// Looks up the CerosApi App Action's id. Prefers the pinned id, falling back to a
+// name match so installs created before the id was pinned keep resolving.
 export async function findCerosActionId(sdk: EditorAppSDK): Promise<string> {
     const actions = await sdk.cma.appAction.getMany({
         organizationId: sdk.ids.organization,
         appDefinitionId: sdk.ids.app || '',
     })
-    const found = actions.items.find((a) => a.name === 'CerosApi')
+    const found =
+        actions.items.find((a) => a.sys.id === CEROS_ACTION_ID) ?? actions.items.find((a) => a.name === 'CerosApi')
     if (!found) throw new Error(CEROS_ACTION_MISSING_ERROR)
     return found.sys.id
 }

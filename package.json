@@ -22,9 +22,9 @@
     "test:ci": "vitest run",
     "create-app-definition": "contentful-app-scripts create-app-definition",
     "add-locations": "contentful-app-scripts add-locations",
+    "upsert-actions": "contentful-app-scripts upsert-actions",
     "upload": "contentful-app-scripts upload --bundle-dir ./build",
     "upload-ci": "contentful-app-scripts upload --ci --bundle-dir ./build --organization-id $CONTENTFUL_ORG_ID --definition-id $CONTENTFUL_APP_DEF_ID --token $CONTENTFUL_ACCESS_TOKEN",
-    "create-app-action": "node create-app-action.js",
     "build:functions": "contentful-app-scripts build-functions --ci"
   },
   "eslintConfig": {
