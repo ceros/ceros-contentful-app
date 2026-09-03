@@ -1,9 +1,9 @@
 {
   "name": "ceros-contentful-app",
-  "version": "0.3.0",
+  "version": "1.1.1",
   "private": true,
   "dependencies": {
-    "@contentful/app-sdk": "^4.45.0",
+    "@contentful/app-sdk": "^4.58.2",
     "@contentful/f36-components": "4.81.1",
     "@contentful/f36-tokens": "4.2.0",
     "@contentful/react-apps-toolkit": "1.2.16",
@@ -17,15 +17,16 @@
     "start": "vite",
     "dev": "vite",
     "build": "rm -rf build && tsc && vite build && npm run build:functions",
+    "build:functions": "contentful-app-scripts build-functions --ci",
     "preview": "vite preview",
-    "test": "vitest",
-    "test:ci": "vitest run",
+    "preinstall": "cd ../contentful-marketplace-partner-apps/packages/contentful-app-components && npm install && npm run build",
+    "test": "vitest run --passWithNoTests",
+    "install-ci": "npm ci",
     "create-app-definition": "contentful-app-scripts create-app-definition",
     "add-locations": "contentful-app-scripts add-locations",
+    "upsert-actions": "contentful-app-scripts upsert-actions",
     "upload": "contentful-app-scripts upload --bundle-dir ./build",
-    "upload-ci": "contentful-app-scripts upload --ci --bundle-dir ./build --organization-id $CONTENTFUL_ORG_ID --definition-id $CONTENTFUL_APP_DEF_ID --token $CONTENTFUL_ACCESS_TOKEN",
-    "create-app-action": "node create-app-action.js",
-    "build:functions": "contentful-app-scripts build-functions --ci"
+    "upload-ci": "contentful-app-scripts upload --ci --bundle-dir ./build --organization-id $CONTENTFUL_ORG_ID --definition-id $CONTENTFUL_APP_DEF_ID --token $CONTENTFUL_ACCESS_TOKEN"
   },
   "eslintConfig": {
     "extends": "react-app"
@@ -43,17 +44,17 @@
     ]
   },
   "devDependencies": {
-    "@contentful/app-scripts": "^2.3.0",
+    "@contentful/app-scripts": "^2.5.12",
     "@testing-library/jest-dom": "6.9.1",
     "@testing-library/react": "^16.3.0",
     "@types/node": "^22.13.5",
     "@types/react": "18.3.13",
     "@types/react-dom": "18.3.1",
-    "@vitejs/plugin-react": "^4.6.0",
-    "jsdom": "^26.0.0",
+    "@vitejs/plugin-react": "^6.0.2",
+    "jsdom": "^26.1.0",
     "typescript": "6.0.3",
-    "vite": "^6.2.2",
-    "vitest": "^3.2.4"
+    "vite": "^8.0.16",
+    "vitest": "^4.1.9"
   },
   "homepage": "."
 }
