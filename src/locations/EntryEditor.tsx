@@ -15,7 +15,7 @@ import React, { Dispatch, useEffect, useState } from 'react'
 import cerosLogo from '../assets/ceros-logo.svg'
 import styles from '../styles'
 import { isKnownCerosHost, isPasteableUrl } from '../oembed'
-import { resolveVanityToCanonical } from '../vanity'
+import { hasExperiencePath, resolveVanityToCanonical } from '../vanity'
 import { AppInstallationParameters } from './ConfigScreen'
 import tokens from '@contentful/f36-tokens'
 import { ExperiencePicker, SelectedExperience } from './ExperiencePicker'
@@ -52,15 +52,19 @@ const VARIANT_NOUNS: Record<EmbedVariant, string> = {
     inline: 'Inline',
 }
 
-// resolveVanityToCanonical returns null for every case it cannot read, and a vanity
-// host exposes nothing that would let us tell those cases apart: a Studio experience
-// served there has no manifest, and neither does a site that isn't Ceros at all. So
-// one message has to cover both, and it names the Studio case explicitly because that
-// is the one an actual Ceros customer will hit.
+// A failed URL with a path is most likely a Studio experience on a custom domain, so that
+// message points at view.ceros.com. A failed bare domain more often has no default
+// experience, so that message leads with adding the path and only names Studio as
+// unsupported: view.ceros.com advice there would send a Flex author to a second failure.
 const UNRECOGNISED_URL_ERROR =
     "We couldn't find a published Ceros experience at that URL. If it's a Studio experience on a " +
     'custom domain, paste its view.ceros.com URL instead — custom domains are currently supported ' +
     'for Flex experiences only.'
+
+const BARE_DOMAIN_ERROR =
+    "We couldn't find a published Ceros experience at that domain. Add the experience path to the " +
+    'URL — for example https://look.example.com/spring-launch. Custom domains are currently ' +
+    'supported for Flex experiences only.'
 
 interface StateProps {
     entry: EntryAPI
@@ -144,7 +148,11 @@ function EmptyState({ entry, setLinked, parameters }: StateProps) {
             let resolvableUrl = url
             if (!isKnownCerosHost(url)) {
                 const canonicalUrl = await resolveVanityToCanonical(url)
-                if (!canonicalUrl) throw new Error(UNRECOGNISED_URL_ERROR)
+                if (!canonicalUrl) {
+                    throw new Error(
+                        hasExperiencePath(url) ? UNRECOGNISED_URL_ERROR : BARE_DOMAIN_ERROR,
+                    )
+                }
                 resolvableUrl = canonicalUrl
             }
 
