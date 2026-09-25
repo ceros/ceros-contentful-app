@@ -52,14 +52,14 @@ const VARIANT_NOUNS: Record<EmbedVariant, string> = {
     inline: 'Inline',
 }
 
-// A failed URL with a path is most likely a Studio experience on a custom domain, so that
-// message points at view.ceros.com. A failed bare domain more often has no default
+// A failed URL with a path is most likely misspelled or a Studio experience on a custom
+// domain, so that message covers both. A failed bare domain more often has no default
 // experience, so that message leads with adding the path and only names Studio as
 // unsupported: view.ceros.com advice there would send a Flex author to a second failure.
 const UNRECOGNISED_URL_ERROR =
-    "We couldn't find a published Ceros experience at that URL. If it's a Studio experience on a " +
-    'custom domain, paste its view.ceros.com URL instead — custom domains are currently supported ' +
-    'for Flex experiences only.'
+    "We couldn't find a published Ceros experience at that URL. Check that the URL is spelled " +
+    "correctly. If it's a Studio experience on a custom domain, paste its view.ceros.com URL " +
+    'instead — custom domains are currently supported for Flex experiences only.'
 
 const BARE_DOMAIN_ERROR =
     "We couldn't find a published Ceros experience at that domain. Add the experience path to the " +

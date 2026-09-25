@@ -334,6 +334,48 @@ describe('Entry — EmptyState paste flow', () => {
         expect(mockCallCerosAction).not.toHaveBeenCalled()
     })
 
+    // Imitates the vanity worker's fallback: an unknown path serves the default experience,
+    // advertising its manifest, and the manifest path serves its HTML.
+    it('refuses a misspelled path on a domain that falls back to its default experience', async () => {
+        const { resolveVanityToCanonical: realResolve } =
+            await vi.importActual<typeof import('../vanity')>('../vanity')
+        mockResolveVanity.mockImplementation(realResolve)
+        const headers = (values: Record<string, string>) => ({
+            get: (name: string) => values[name.toLowerCase()] ?? null,
+        })
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async (_url: string, init?: RequestInit) =>
+                init?.method === 'HEAD'
+                    ? {
+                          ok: true,
+                          status: 200,
+                          headers: headers({
+                              'x-flex-manifest': 'https://myaccount.ceros.site/default-experience/manifest.v1.json',
+                          }),
+                      }
+                    : {
+                          ok: true,
+                          status: 200,
+                          headers: headers({ 'content-type': 'text/html; charset=UTF-8' }),
+                          body: null,
+                          text: async () => '<!doctype html><html></html>',
+                      },
+            ),
+        )
+
+        try {
+            await pasteAndSubmit('https://look.example.com/spring-lanch')
+
+            await waitFor(() =>
+                expect(screen.getByText(/Check that the URL is spelled correctly/i)).toBeInTheDocument()
+            )
+            expect(mockCallCerosAction).not.toHaveBeenCalled()
+        } finally {
+            vi.unstubAllGlobals()
+        }
+    })
+
     it('resolves a vanity URL to its canonical URL before calling the function', async () => {
         mockResolveVanity.mockResolvedValue('https://myaccount.ceros.site/flex-experience')
         mockCallCerosAction.mockResolvedValue({ data: FLEX_MODEL })

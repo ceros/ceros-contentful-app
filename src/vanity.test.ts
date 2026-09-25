@@ -43,18 +43,19 @@ const makeBody = (chunks: string[]) => {
     return { body: { getReader: () => reader }, reader }
 }
 
-const okResponse = (chunks: string[]) => {
+const headersOf = (values: Record<string, string | null>) => ({
+    get: (name: string) => values[name.toLowerCase()] ?? null,
+})
+
+const okResponse = (chunks: string[], contentType = 'application/json') => {
     const { body, reader } = makeBody(chunks)
-    return { response: { ok: true, status: 200, body }, reader }
+    return { response: { ok: true, status: 200, headers: headersOf({ 'content-type': contentType }), body }, reader }
 }
 
 const headResponse = (manifestHeader: string | null, ok = true) => ({
     ok,
     status: ok ? 200 : 404,
-    headers: {
-        get: (name: string) =>
-            name.toLowerCase() === 'x-flex-manifest' ? manifestHeader : null,
-    },
+    headers: headersOf({ 'x-flex-manifest': manifestHeader }),
 })
 
 // A page served without the Allow-Origin grant: the browser rejects the fetch outright.
@@ -135,6 +136,39 @@ describe('resolveVanityToCanonical', () => {
                 CANONICAL
             )
             expect(mockFetch).toHaveBeenCalledTimes(1)
+        })
+
+        it('is believed for a page-scoped path under the experience it names', async () => {
+            mockFetch.mockResolvedValue(
+                headResponse('https://myaccount.ceros.site/flex-experience/page-2/manifest.v1.json')
+            )
+
+            expect(
+                await resolveVanityToCanonical('https://look.example.com/flex-experience/page-2')
+            ).toBe(CANONICAL)
+            expect(mockFetch).toHaveBeenCalledTimes(1)
+        })
+
+        it('does not link the default experience for a misspelled path', async () => {
+            mockFetch
+                .mockResolvedValueOnce(headResponse(ADVERTISED_MANIFEST))
+                .mockResolvedValue({ ok: false, status: 404, body: null })
+
+            expect(await resolveVanityToCanonical('https://look.example.com/flex-experiense')).toBeNull()
+            expect(mockFetch).toHaveBeenCalledTimes(2)
+        })
+
+        it('falls through to the manifest when it names a different experience', async () => {
+            const { response } = okResponse([manifestHead({ ...EXPERIENCE, slug: 'spring-launch' })])
+            mockFetch.mockResolvedValueOnce(headResponse(ADVERTISED_MANIFEST)).mockResolvedValue(response)
+
+            expect(await resolveVanityToCanonical('https://look.example.com/spring-launch')).toBe(
+                'https://myaccount.ceros.site/spring-launch'
+            )
+            expect(mockFetch).toHaveBeenLastCalledWith(
+                'https://look.example.com/spring-launch/manifest.v1.json',
+                expect.anything()
+            )
         })
 
         it('resolves to the experience ROOT when it names a page', async () => {
@@ -347,10 +381,31 @@ describe('resolveVanityToCanonical', () => {
             expect(await resolveVanityToCanonical('https://look.example.com/thing')).toBeNull()
         })
 
+        it('returns null for a 200 that is not JSON, even if it carries an experience object', async () => {
+            const { response, reader } = okResponse(
+                [`<!doctype html><script>${manifestHead(EXPERIENCE)}</script>`],
+                'text/html; charset=UTF-8',
+            )
+            mockFallback(response)
+
+            expect(await resolveVanityToCanonical('https://look.example.com/flex-experiense')).toBeNull()
+            expect(reader.read).not.toHaveBeenCalled()
+        })
+
+        it('accepts a JSON content type with parameters', async () => {
+            const { response } = okResponse([manifestHead(EXPERIENCE)], 'Application/JSON; charset=utf-8')
+            mockFallback(response)
+
+            expect(await resolveVanityToCanonical('https://look.example.com/flex-experience')).toBe(
+                CANONICAL
+            )
+        })
+
         it('falls back to the whole body where response.body is unavailable', async () => {
             mockFallback({
                 ok: true,
                 status: 200,
+                headers: headersOf({ 'content-type': 'application/json' }),
                 body: null,
                 text: async () => manifestHead(EXPERIENCE),
             })

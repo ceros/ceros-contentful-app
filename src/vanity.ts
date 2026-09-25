@@ -12,6 +12,12 @@
 // a BARE vanity domain, whose root serves the domain's default experience:
 // `<root>/manifest.v1.json` 404s.
 //
+// For a URL WITH a path, the header is believed only when the experience it names is the
+// pasted path's first segment. A domain may serve its default experience for a path it
+// does not recognise, so a misspelled `/spring-lanch` would otherwise link the default
+// experience instead of being refused. A mismatch falls through to the fallback, which
+// 404s on a path that names nothing.
+//
 // FALLBACK — fetch `<pasted-path>/manifest.v1.json`, which sends
 // `Access-Control-Allow-Origin: *` even through a vanity host, and read two identifier
 // fields out of it. It needs a path, so it cannot serve a bare domain.
@@ -152,6 +158,11 @@ function experiencePath(url: URL): string {
     return url.pathname.replace(/\/+$/, '')
 }
 
+// The experience segment of the pasted path, or null for a bare domain.
+function pastedSlug(url: URL): string | null {
+    return experiencePath(url).split('/').filter(Boolean)[0] ?? null
+}
+
 // resolveVanityToCanonical cannot say why it returned null; callers use this to tell a
 // bare domain apart when picking the message.
 export function hasExperiencePath(pastedUrl: string): boolean {
@@ -177,7 +188,7 @@ async function readManifestHeader(url: URL, signal: AbortSignal): Promise<string
 }
 
 // The value is advertised by a host the author pasted, so nothing in it is trusted.
-function canonicalFromManifestHeader(headerValue: string): string | null {
+function canonicalFromManifestHeader(headerValue: string, expectedSlug: string | null): string | null {
     let manifest: URL
     try {
         manifest = new URL(headerValue.trim())
@@ -197,6 +208,7 @@ function canonicalFromManifestHeader(headerValue: string): string | null {
     const segments = manifest.pathname.split('/').filter(Boolean)
     if (segments.length < 2 || segments.length > 3) return null
     if (segments[segments.length - 1] !== MANIFEST_FILENAME) return null
+    if (expectedSlug !== null && segments[0] !== expectedSlug) return null
 
     return canonicalExperienceUrl(accountSlug, segments[0])
 }
@@ -212,6 +224,12 @@ async function canonicalFromManifestBody(url: URL, signal: AbortSignal): Promise
     })
     if (!response.ok) return null
 
+    // A vanity domain that falls back to its default experience answers a manifest path
+    // naming no experience with the default's HTML, as a 200. Content-Type is readable
+    // cross-origin without being exposed, so this costs nothing.
+    const contentType = response.headers.get('content-type')?.toLowerCase() ?? ''
+    if (!contentType.includes('json')) return null
+
     const experience = await readExperienceFromResponse(response)
     if (!experience) return null
 
@@ -223,10 +241,10 @@ async function canonicalFromManifestBody(url: URL, signal: AbortSignal): Promise
  * `https://<accountSlug>.ceros.site/<slug>`, which resolveExperience already accepts.
  *
  * Returns null for anything that is not a published Flex experience on that host —
- * a non-Flex (Studio) page, an unpublished one, a domain with no default experience,
- * a non-Ceros site, or identifiers that fail validation. Callers decide what to tell
- * the author; this module cannot tell those cases apart, because a vanity host exposes
- * nothing else readable.
+ * a non-Flex (Studio) page, an unpublished one, a path the domain does not serve, a
+ * domain with no default experience, a non-Ceros site, or identifiers that fail
+ * validation. Callers decide what to tell the author; this module cannot tell those
+ * cases apart, because a vanity host exposes nothing else readable.
  */
 export async function resolveVanityToCanonical(pastedUrl: string): Promise<string | null> {
     let url: URL
@@ -240,7 +258,7 @@ export async function resolveVanityToCanonical(pastedUrl: string): Promise<strin
 
     try {
         const header = await withTimeout((signal) => readManifestHeader(url, signal))
-        const canonical = header && canonicalFromManifestHeader(header)
+        const canonical = header && canonicalFromManifestHeader(header, pastedSlug(url))
         if (canonical) return canonical
 
         return await withTimeout((signal) => canonicalFromManifestBody(url, signal))
