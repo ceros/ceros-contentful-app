@@ -34,7 +34,8 @@ export type EmbedVariant = 'fullHeight' | 'scrollable' | 'inline'
 // Identifies WHICH variant a stored embed code is, where classifyEmbed only
 // answers inline/iframe/none. Refresh needs this: the code it compares against
 // comes from resolveExperience, which cannot offer every variant the picker
-// inserted from (the Flex manifest carries no scrollable snippet at all), so
+// inserted from (the Flex manifest carries no scrollable snippet at all, and
+// the REST fill-in in EntryEditor needs an API key), so
 // without a markup-level answer a scrollable entry is indistinguishable from a
 // full-height one and gets silently rewritten as full-height.
 //

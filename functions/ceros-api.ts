@@ -414,6 +414,7 @@ async function run(
           const modes = manifest?.deliveryModes
           const fullHeight = modes?.iframe?.snippet
           const inline = modes?.inline?.snippet
+          const resourceId = manifest?.experience?.experienceResourceId
 
           if (inline || fullHeight) {
             return {
@@ -440,6 +441,9 @@ async function run(
                 // Read pre-formed from the manifest, never hand-built: the live
                 // snippet carries attributes local builders omit.
                 ...(inline ? {} : { inlineUnavailable: true }),
+                // Validated like any caller-supplied id: it comes from a fetched
+                // document and getEmbedCode interpolates it into a REST path.
+                ...(isResourceId(resourceId) ? { resourceId } : {}),
               },
               paging: null,
             }

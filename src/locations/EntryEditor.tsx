@@ -304,6 +304,22 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
     const [styleLoading, setStyleLoading] = useState(false)
     const [applyingStyle, setApplyingStyle] = useState(false)
 
+    // The Flex manifest carries no scrollable snippet, but the REST embed codes
+    // do, keyed by the id the manifest does carry. Any failure — no key, API
+    // error, no snippet — yields undefined, leaving the manifest's styles as
+    // the whole offer rather than failing the resolve.
+    const fetchFlexScrollable = async (resourceId: string, actionId: string): Promise<string | undefined> => {
+        try {
+            const res = await callCerosAction(sdk, actionId, { action: 'getEmbedCode', resourceId })
+            if (res.error) console.warn('Could not fetch the Flex scrollable embed code:', res.error)
+            const code = res.data?.scrollableEmbedCode
+            return typeof code === 'string' ? code : undefined
+        } catch (err) {
+            console.warn('Could not fetch the Flex scrollable embed code:', err)
+            return undefined
+        }
+    }
+
     // Resolves the linked experience's currently-available variants. Shared by
     // refresh and "Change embed style" so both see the same set.
     const resolveLinked = async (): Promise<ConfirmationModel> => {
@@ -313,6 +329,10 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
         if (res.error) throw new Error(String(res.error))
         const model = res.data as ConfirmationModel
         if (!model?.embedCodes) throw new Error('No embed code could be generated for this experience.')
+        if (model.resourceId && !model.embedCodes.scrollable) {
+            const scrollable = await fetchFlexScrollable(model.resourceId, actionId)
+            if (scrollable) return { ...model, embedCodes: { ...model.embedCodes, scrollable } }
+        }
         return model
     }
 
@@ -322,24 +342,22 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
     //
     // 1. An exact match against the model's own codes — unambiguous.
     // 2. classifyVariant on the stored markup. This is what makes a scrollable
-    //    entry identifiable at all: resolveExperience cannot offer every
+    //    entry identifiable at all: resolveLinked cannot always offer every
     //    variant the picker inserted from (the Flex manifest carries no
-    //    scrollable snippet, and Studio's oEmbed payload carries whichever
-    //    single variant the experience published with), so for those entries
-    //    tier 1 can never match and the markup is the only evidence left.
-    // 3. Only when the markup is genuinely unreadable, and only for an iframe
-    //    entry: accept the model's offer if it leaves no choice. One iframe
-    //    variant offered means one possible answer; two means we would be
-    //    guessing, so this returns null instead.
+    //    scrollable snippet and the REST fill-in needs an API key, and Studio's
+    //    oEmbed payload carries whichever single variant the experience
+    //    published with), so for those entries tier 1 cannot match and the
+    //    markup is the only evidence left.
+    // 3. Only when the markup is unreadable (e.g. an author edited the style
+    //    marker away), and only for an iframe entry: fall back to Full height,
+    //    Ceros's default, or to Scrollable if that is the only iframe style
+    //    offered. A refresh the author asked for should still happen.
     //
-    // null means "unknown" — callers must refuse to rewrite rather than guess.
-    // Guessing is what this replaced: preferring fullHeight whenever both
-    // iframe variants were absent from the comparison silently rewrote a
-    // deliberate Scrollable entry as Full height, and the same guess across the
-    // iframe/inline boundary would rewrite an inline entry as an iframe one
-    // whenever resolveExperience returned its designed degraded response
-    // (`inlineUnavailable: true`, only an iframe key present — see
-    // functions/ceros-api.ts).
+    // null means "unknown" — callers must refuse to rewrite. The fallback never
+    // crosses the iframe/inline boundary: that guess would rewrite an inline
+    // entry as an iframe one whenever resolveExperience returned its designed
+    // degraded response (`inlineUnavailable: true`, only an iframe key present
+    // — see functions/ceros-api.ts).
     const currentVariant = (model: ConfirmationModel): EmbedVariant | null => {
         const match = (Object.entries(model.embedCodes) as [EmbedVariant, string | undefined][]).find(
             ([, code]) => code === embedCode
@@ -356,8 +374,8 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
         // cross-kind rewrite impossible if either of those ever stops holding.
         if (embedKind !== 'iframe') return null
 
-        const offered = (['fullHeight', 'scrollable'] as const).filter((v) => model.embedCodes[v])
-        return offered.length === 1 ? offered[0] : null
+        if (model.embedCodes.fullHeight) return 'fullHeight'
+        return model.embedCodes.scrollable ? 'scrollable' : null
     }
 
     // Refresh rewrites the embed code in the SAME variant it was stored in, and
@@ -366,8 +384,7 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
     //
     // Two distinct non-success outcomes, kept apart because they ask the author
     // for different things: the style is unavailable (the experience is fine;
-    // Ceros just doesn't offer that snippet, which for a Flex Scrollable entry
-    // is permanent — see styleUnavailable), versus the variant is unknown (we
+    // Ceros just doesn't offer that snippet), versus the variant is unknown (we
     // cannot read the stored markup, which is a bug or a snippet shape we don't
     // recognise, and is reported through isRefreshError).
     const refreshEmbedCode = async () => {
@@ -534,7 +551,7 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
                                 <Button
                                     variant="secondary"
                                     type="submit"
-                                    isDisabled={unlinkLoading || refreshLoading}
+                                    isDisabled={unlinkLoading || refreshLoading || styleLoading}
                                     isLoading={refreshLoading}
                                 >
                                     {refreshLoading ? 'Refreshing Embed Code...' : 'Refresh Embed Code'}

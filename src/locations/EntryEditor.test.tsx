@@ -21,7 +21,7 @@ vi.mock('../ceros-action', () => ({
 }))
 
 import { useSDK } from '@contentful/react-apps-toolkit'
-import { callCerosAction, findCerosActionId } from '../ceros-action'
+import { callCerosAction, findCerosActionId, type CerosActionResult } from '../ceros-action'
 import { resolveVanityToCanonical } from '../vanity'
 import Entry from './EntryEditor'
 
@@ -429,6 +429,8 @@ describe('Entry — LinkedState refresh and embed style', () => {
         embedCodes: { fullHeight: IFRAME_SNIPPET, inline: INLINE_SNIPPET },
     }
 
+    const EMBED_CODES_CALL = [expect.anything(), 'action-1', expect.objectContaining({ action: 'getEmbedCode' })]
+
     let sdk: ReturnType<typeof makeLinkedSdk>
 
     const renderLinked = async (storedEmbedCode: string) => {
@@ -466,6 +468,15 @@ describe('Entry — LinkedState refresh and embed style', () => {
             expect(sdk.entry.fields.embedCode.setValue).toHaveBeenCalledWith(IFRAME_SNIPPET)
         )
         expect(sdk.entry.fields.embedCode.setValue).not.toHaveBeenCalledWith(INLINE_SNIPPET)
+    })
+
+    it('disables Refresh while Change embed style is still resolving', async () => {
+        await renderLinked(IFRAME_SNIPPET)
+        mockCallCerosAction.mockReturnValue(new Promise(() => {}))
+
+        fireEvent.click(screen.getByRole('button', { name: /change embed style/i }))
+
+        await waitFor(() => expect(screen.getByRole('button', { name: /refresh embed code/i })).toBeDisabled())
     })
 
     it('keeps the stored embed code when refresh fails', async () => {
@@ -599,13 +610,12 @@ describe('Entry — LinkedState refresh and embed style', () => {
         expect(sdk.entry.save).not.toHaveBeenCalled()
     })
 
-    it('leaves a Flex Scrollable entry untouched when the resolved model carries no scrollable snippet', async () => {
-        // The review case, and the DEFAULT for Flex rather than an edge: the
-        // picker can always insert Scrollable for Flex, but resolveExperience
-        // can never return a scrollable snippet for one — the manifest has no
-        // scrollable delivery mode and Flex oEmbed is full-height only. Refresh
-        // used to fall back to fullHeight here and report success, silently
-        // converting a deliberate Scrollable entry to Full height.
+    it('leaves a Flex Scrollable entry untouched when the manifest carries no resourceId', async () => {
+        // resolveExperience never returns a scrollable snippet for Flex (the
+        // manifest has no scrollable delivery mode), and without a resourceId
+        // there is no REST lookup to fall back on. Refresh used to fall back to
+        // fullHeight here and report success, silently converting a deliberate
+        // Scrollable entry to Full height.
         const FLEX_SCROLLABLE =
             '<div data-embed-width="100%" data-embed-height="800px" data-ceros-experience="https://myaccount.ceros.site/flex-experience"></div>\n' +
             '<script src="https://assets.ceros.site/js/embed.v1.js"></script>'
@@ -618,6 +628,84 @@ describe('Entry — LinkedState refresh and embed style', () => {
         expect(sdk.entry.fields.embedCode.setValue).not.toHaveBeenCalled()
         expect(sdk.entry.save).not.toHaveBeenCalled()
         expect(screen.queryByText(/error refreshing/i)).not.toBeInTheDocument()
+        expect(mockCallCerosAction).not.toHaveBeenCalledWith(...EMBED_CODES_CALL)
+    })
+
+    describe('Flex Scrollable through the REST embed codes', () => {
+        const STORED_SCROLLABLE =
+            '<div data-embed-width="100%" data-embed-height="800px" data-ceros-experience="https://myaccount.ceros.site/flex-experience"></div>\n' +
+            '<script src="https://assets.ceros.site/js/embed.v1.js"></script>'
+        const FRESH_SCROLLABLE =
+            '<div data-embed-width="100%" data-embed-height="720px" data-ceros-experience="https://myaccount.ceros.site/flex-experience"></div>\n' +
+            '<script src="https://assets.ceros.site/js/embed.v2.js"></script>'
+        const RESOLVED_WITH_ID = { ...RESOLVED, resourceId: 'exp-123' }
+
+        const mockActions = (embedCodes: () => Promise<CerosActionResult>) =>
+            mockCallCerosAction.mockImplementation(async (_sdk, _id, params: any) =>
+                params.action === 'getEmbedCode' ? embedCodes() : { data: RESOLVED_WITH_ID }
+            )
+
+        it('saves the scrollable code the API returns for the manifest resourceId', async () => {
+            mockActions(async () => ({
+                data: { fullHeightEmbedCode: IFRAME_SNIPPET, scrollableEmbedCode: FRESH_SCROLLABLE },
+            }))
+            await renderLinked(STORED_SCROLLABLE)
+
+            fireEvent.click(screen.getByRole('button', { name: /refresh embed code/i }))
+
+            await waitFor(() => expect(sdk.entry.fields.embedCode.setValue).toHaveBeenCalledWith(FRESH_SCROLLABLE))
+            expect(mockCallCerosAction).toHaveBeenCalledWith(expect.anything(), 'action-1', {
+                action: 'getEmbedCode',
+                resourceId: 'exp-123',
+            })
+            expect(sdk.entry.save).toHaveBeenCalled()
+        })
+
+        it.each([
+            ['the install has no API key', async () => ({ error: 'Ceros API key is not configured.' })],
+            ['the API call rejects', async () => { throw new Error('network down') }],
+            ['the API returns no scrollable code', async () => ({ data: { fullHeightEmbedCode: IFRAME_SNIPPET } })],
+            ['the API returns a non-string scrollable code', async () => ({ data: { scrollableEmbedCode: { html: 'x' } } })],
+        ])('keeps the stored code and shows the unavailable note when %s', async (_label, embedCodes) => {
+            mockActions(embedCodes)
+            await renderLinked(STORED_SCROLLABLE)
+
+            fireEvent.click(screen.getByRole('button', { name: /refresh embed code/i }))
+
+            await waitFor(() => expect(screen.getByText(/no Scrollable embed code/i)).toBeInTheDocument())
+            expect(sdk.entry.fields.embedCode.setValue).not.toHaveBeenCalled()
+            expect(sdk.entry.save).not.toHaveBeenCalled()
+            expect(screen.queryByText(/error refreshing/i)).not.toBeInTheDocument()
+        })
+
+        it('still refreshes a Flex Full height entry when the API call fails', async () => {
+            mockActions(async () => { throw new Error('network down') })
+            await renderLinked(IFRAME_SNIPPET)
+
+            fireEvent.click(screen.getByRole('button', { name: /refresh embed code/i }))
+
+            await waitFor(() => expect(sdk.entry.fields.embedCode.setValue).toHaveBeenCalledWith(IFRAME_SNIPPET))
+        })
+
+        it('offers and preselects Scrollable in Change embed style when the API returns it', async () => {
+            mockActions(async () => ({ data: { scrollableEmbedCode: FRESH_SCROLLABLE } }))
+            await renderLinked(STORED_SCROLLABLE)
+
+            fireEvent.click(screen.getByRole('button', { name: /change embed style/i }))
+
+            await waitFor(() => expect(screen.getByLabelText(/scrollable/i)).toBeChecked())
+            expect(screen.getByLabelText(/full height/i)).not.toBeChecked()
+        })
+
+        it('offers only the manifest styles in Change embed style when the API gives nothing', async () => {
+            mockActions(async () => ({ error: 'Ceros API key is not configured.' }))
+            await renderLinked(IFRAME_SNIPPET)
+
+            fireEvent.click(screen.getByRole('button', { name: /change embed style/i }))
+
+            await waitFor(() => expect(screen.getByLabelText(/full height/i)).toBeChecked())
+            expect(screen.queryByLabelText(/scrollable/i)).not.toBeInTheDocument()
+        })
     })
 
     it('leaves a Flex Full height entry untouched when the resolved model carries only an inline snippet', async () => {
@@ -646,6 +734,21 @@ describe('Entry — LinkedState refresh and embed style', () => {
         await waitFor(() => expect(screen.getByText(/no Full height embed code/i)).toBeInTheDocument())
         expect(sdk.entry.fields.embedCode.setValue).not.toHaveBeenCalled()
         expect(sdk.entry.save).not.toHaveBeenCalled()
+        expect(screen.queryByText(/error refreshing/i)).not.toBeInTheDocument()
+    })
+
+    it('refreshes an iframe entry whose style marker was edited away as Full height, even when Scrollable is also offered', async () => {
+        const EDITED = '<iframe src="https://myaccount.ceros.site/flex-experience" data-author-note="edited"></iframe>'
+        const SCROLLABLE_SNIPPET =
+            '<div data-embed-width="100%" data-embed-height="720px" data-ceros-experience="https://myaccount.ceros.site/flex-experience"></div>'
+        mockCallCerosAction.mockResolvedValue({
+            data: { ...RESOLVED, embedCodes: { ...RESOLVED.embedCodes, scrollable: SCROLLABLE_SNIPPET } },
+        })
+        await renderLinked(EDITED)
+
+        fireEvent.click(screen.getByRole('button', { name: /refresh embed code/i }))
+
+        await waitFor(() => expect(sdk.entry.fields.embedCode.setValue).toHaveBeenCalledWith(IFRAME_SNIPPET))
         expect(screen.queryByText(/error refreshing/i)).not.toBeInTheDocument()
     })
 
