@@ -312,18 +312,20 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
     const [styleLoading, setStyleLoading] = useState(false)
     const [applyingStyle, setApplyingStyle] = useState(false)
 
-    // The Flex manifest carries no scrollable snippet, but the REST embed codes
-    // do, keyed by the id the manifest does carry. Any failure — no key, API
-    // error, no snippet — yields undefined, leaving the manifest's styles as
-    // the whole offer rather than failing the resolve.
-    const fetchFlexScrollable = async (resourceId: string, actionId: string): Promise<string | undefined> => {
+    // resolveExperience can't always offer Scrollable — the Flex manifest has no
+    // scrollable snippet, and Studio's oEmbed returns only Full height when an
+    // experience offers both — but the REST embed codes can, keyed by the
+    // resourceId resolveExperience found. Any failure — no key, API error, no
+    // snippet — yields undefined, leaving the resolved styles as the whole
+    // offer rather than failing the resolve.
+    const fetchRestScrollable = async (resourceId: string, actionId: string): Promise<string | undefined> => {
         try {
             const res = await callCerosAction(sdk, actionId, { action: 'getEmbedCode', resourceId })
-            if (res.error) console.warn('Could not fetch the Flex scrollable embed code:', res.error)
+            if (res.error) console.warn('Could not fetch the scrollable embed code:', res.error)
             const code = res.data?.scrollableEmbedCode
             return typeof code === 'string' ? code : undefined
         } catch (err) {
-            console.warn('Could not fetch the Flex scrollable embed code:', err)
+            console.warn('Could not fetch the scrollable embed code:', err)
             return undefined
         }
     }
@@ -338,7 +340,7 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
         const model = res.data as ConfirmationModel
         if (!model?.embedCodes) throw new Error('No embed code could be generated for this experience.')
         if (model.resourceId && !model.embedCodes.scrollable) {
-            const scrollable = await fetchFlexScrollable(model.resourceId, actionId)
+            const scrollable = await fetchRestScrollable(model.resourceId, actionId)
             if (scrollable) return { ...model, embedCodes: { ...model.embedCodes, scrollable } }
         }
         return model

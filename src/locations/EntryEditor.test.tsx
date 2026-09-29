@@ -751,9 +751,9 @@ describe('Entry — LinkedState refresh and embed style', () => {
             '<script src="https://assets.ceros.site/js/embed.v2.js"></script>'
         const RESOLVED_WITH_ID = { ...RESOLVED, resourceId: 'exp-123' }
 
-        const mockActions = (embedCodes: () => Promise<CerosActionResult>) =>
+        const mockActions = (embedCodes: () => Promise<CerosActionResult>, resolved: object = RESOLVED_WITH_ID) =>
             mockCallCerosAction.mockImplementation(async (_sdk, _id, params: any) =>
-                params.action === 'getEmbedCode' ? embedCodes() : { data: RESOLVED_WITH_ID }
+                params.action === 'getEmbedCode' ? embedCodes() : { data: resolved }
             )
 
         it('saves the scrollable code the API returns for the manifest resourceId', async () => {
@@ -770,6 +770,30 @@ describe('Entry — LinkedState refresh and embed style', () => {
                 resourceId: 'exp-123',
             })
             expect(sdk.entry.save).toHaveBeenCalled()
+        })
+
+        it('refreshes a picked Studio Scrollable entry when oEmbed offers only Full height', async () => {
+            // A Studio experience offering both iframe styles makes oEmbed return
+            // Full height alone, so the scrollable code can only come from REST.
+            const studioIframe = (attrs: string) =>
+                `<div><iframe src="https://view.ceros.com/myaccount/studio-experience" class="ceros-experience" ${attrs}></iframe></div>`
+            const FRESH_STUDIO_SCROLLABLE = studioIframe('title="new"')
+            mockActions(async () => ({ data: { scrollableEmbedCode: FRESH_STUDIO_SCROLLABLE } }), {
+                isFlex: false,
+                name: 'Studio Experience',
+                url: 'https://view.ceros.com/myaccount/studio-experience',
+                embedCodes: { fullHeight: studioIframe('scrolling="no"') },
+                resourceId: 'studio-exp-1',
+            })
+            await renderLinked(studioIframe('title="old"'))
+
+            fireEvent.click(screen.getByRole('button', { name: /refresh embed code/i }))
+
+            await waitFor(() => expect(sdk.entry.fields.embedCode.setValue).toHaveBeenCalledWith(FRESH_STUDIO_SCROLLABLE))
+            expect(mockCallCerosAction).toHaveBeenCalledWith(expect.anything(), 'action-1', {
+                action: 'getEmbedCode',
+                resourceId: 'studio-exp-1',
+            })
         })
 
         it.each([

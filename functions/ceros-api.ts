@@ -207,6 +207,82 @@ async function resolveViaOembed(
   }
 }
 
+// The Studio player page inlines a script object whose experience record is a
+// plain JSON literal. Only that record is extracted and parsed — the page's
+// script is never executed. This is page data rather than a published
+// contract, so any mismatch returns null and callers fall back to oEmbed alone.
+export function experienceResourceIdFromStudioPage(html: string): string | null {
+  const context = html.indexOf('window.cerosContext')
+  if (context === -1) return null
+  const key = /\bissue\s*:\s*\{/g
+  key.lastIndex = context
+  const found = key.exec(html)
+  if (!found) return null
+
+  const start = found.index + found[0].length - 1
+  let depth = 0
+  let inString = false
+  for (let i = start; i < html.length; i++) {
+    const ch = html[i]
+    if (inString) {
+      if (ch === '\\') i++
+      else if (ch === '"') inString = false
+    } else if (ch === '"') {
+      inString = true
+    } else if (ch === '{') {
+      depth++
+    } else if (ch === '}' && --depth === 0) {
+      try {
+        const resourceId = JSON.parse(html.slice(start, i + 1)).resourceId
+        return isResourceId(resourceId) ? resourceId : null
+      } catch {
+        return null
+      }
+    }
+  }
+  return null
+}
+
+// Fetches an already-allowlisted Ceros URL, returning null on a network
+// failure, a non-2xx, or a redirect that lands off the allowlist.
+//
+// fetch() follows redirects by default, so an allowlisted first hop can still
+// relocate off-host before we ever trust its response. Re-validate the final
+// URL rather than switching to redirect: 'manual', so ordinary same-host
+// redirects keep working. `response.url` is legitimately '' on some runtimes
+// (it's a Response property, not guaranteed non-empty) — fall back to the
+// requested url, which the caller already validated and which carries no less
+// information when there's no redirect to check.
+async function fetchAllowedCerosUrl(
+  url: string,
+  init?: RequestInit
+): Promise<{ response: Response; finalUrl: string } | null> {
+  try {
+    const response = await fetch(url, init)
+    if (!response.ok) return null
+    const finalUrl = response.url || url
+    return isAllowedCerosUrl(finalUrl, { allowViewCeros: true }) ? { response, finalUrl } : null
+  } catch {
+    return null
+  }
+}
+
+// Optional enrichment running beside the oEmbed call it must never hold up,
+// hence the timeout. Guarded because a runtime without AbortSignal.timeout
+// would otherwise throw, failing the whole resolve.
+const STUDIO_PAGE_TIMEOUT_MS = 3000
+
+async function fetchStudioResourceId(pageUrl: string): Promise<string | null> {
+  const signal = globalThis.AbortSignal?.timeout?.(STUDIO_PAGE_TIMEOUT_MS)
+  const page = await fetchAllowedCerosUrl(pageUrl, { signal })
+  if (!page) return null
+  try {
+    return experienceResourceIdFromStudioPage(await page.response.text())
+  } catch {
+    return null
+  }
+}
+
 // ── Normalisation helpers ────────────────────────────────────────────────────
 
 function normalizeArray(data: any): any[] {
@@ -375,22 +451,9 @@ async function run(
       // before the first fetch.
       if (!isAllowedCerosUrl(pastedUrl, { allowViewCeros: true })) return { error: INVALID_URL_ERROR }
 
-      let head: Response
-      try {
-        head = await fetch(pastedUrl, { method: 'HEAD' })
-      } catch {
-        return { error: INVALID_URL_ERROR }
-      }
-      if (!head.ok) return { error: INVALID_URL_ERROR }
-
-      // fetch() follows redirects by default, so an allowlisted first hop can
-      // still relocate off-host before we ever trust its headers. Re-validate
-      // the final URL rather than switching to redirect: 'manual', so ordinary
-      // same-host redirects keep working. `head.url` is legitimately '' on some
-      // runtimes (it's a Response property, not guaranteed non-empty) — fall
-      // back to the pasted url, which was already validated above and carries
-      // no less information when there's no redirect to check.
-      if (!isAllowedCerosUrl(head.url || pastedUrl, { allowViewCeros: true })) return { error: INVALID_URL_ERROR }
+      const headResult = await fetchAllowedCerosUrl(pastedUrl, { method: 'HEAD' })
+      if (!headResult) return { error: INVALID_URL_ERROR }
+      const head = headResult.response
 
       const root = experienceRoot(pastedUrl)
 
@@ -464,7 +527,13 @@ async function run(
         return { error: UNPUBLISHED_FLEX_ERROR }
       }
 
-      return await resolveViaOembed(pastedUrl, root, false)
+      const [resolved, resourceId] = await Promise.all([
+        resolveViaOembed(pastedUrl, root, false),
+        // The id only feeds getEmbedCode, which needs a key — skip the page otherwise.
+        requireApiKey(context) ? fetchStudioResourceId(headResult.finalUrl) : null,
+      ])
+      if (!resourceId || !resolved.data) return resolved
+      return { ...resolved, data: { ...(resolved.data as Record<string, unknown>), resourceId } }
     }
 
     default:

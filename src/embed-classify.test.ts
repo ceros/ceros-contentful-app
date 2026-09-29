@@ -109,3 +109,35 @@ describe('classifyVariant', () => {
         expect(classifyVariant('')).toBeNull()
     })
 })
+
+// A Studio account publishing through a custom domain gets iframe codes on that
+// domain instead of view.ceros.com (shape probed 2026-09-28; synthetic host).
+const STUDIO_CUSTOM_DOMAIN =
+    '<div style="position:relative;width:auto;padding:0 0 75%;height:0" id="experience-abc" data-aspectRatio="1.33333333">' +
+    '<iframe allowfullscreen src="https://experiences.example.com/studio-experience?heightOverride=1000" ' +
+    'style="position:absolute;top:0;left:0;height:1px;width:1px;min-height:100%;min-width:100%" frameborder="0" ' +
+    'class="ceros-experience" title="Studio Experience" scrolling="no"></iframe></div>' +
+    '<script type="text/javascript" src="https://experiences.example.com/scroll-proxy.min.js" data-ceros-origin-domains="experiences.example.com"></script>'
+
+describe('classifyEmbed — Studio custom domains', () => {
+    it('recognises a Studio iframe served from a custom domain', () => {
+        expect(classifyEmbed(STUDIO_CUSTOM_DOMAIN)).toBe('iframe')
+    })
+
+    it('identifies its variant from the Studio markup', () => {
+        expect(classifyVariant(STUDIO_CUSTOM_DOMAIN)).toBe('fullHeight')
+    })
+
+    it.each([
+        ['an iframe without the ceros-experience class', '<iframe src="https://experiences.example.com/studio-experience"></iframe>'],
+        ['a ceros-experience iframe with a non-https src', '<iframe src="http://experiences.example.com/x" class="ceros-experience"></iframe>'],
+        ['a ceros-experience iframe with no src', '<iframe class="ceros-experience"></iframe>'],
+        ['the class on a non-iframe element', '<div class="ceros-experience"><a href="https://experiences.example.com/x">x</a></div>'],
+        ['a data-src in place of src', '<iframe class="ceros-experience" data-src="https://experiences.example.com/x"></iframe>'],
+        ['a data-class in place of class', '<iframe data-class="ceros-experience" src="https://experiences.example.com/x"></iframe>'],
+        ['a class that merely contains the marker', '<iframe class="x-ceros-experience" src="https://experiences.example.com/x"></iframe>'],
+        ['the marker as one of several classes', '<iframe class="ceros-experience wide" src="https://experiences.example.com/x"></iframe>'],
+    ])('still rejects %s', (_label, code) => {
+        expect(classifyEmbed(code)).toBe('none')
+    })
+})

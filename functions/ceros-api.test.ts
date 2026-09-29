@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { handler } from './ceros-api'
+import { experienceResourceIdFromStudioPage, handler } from './ceros-api'
 
 type JsonResponse = { ok: boolean; status: number; json: () => Promise<any>; text: () => Promise<string> }
 
@@ -282,16 +282,49 @@ const FLEX_PAGE = 'https://myaccount.ceros.site/flex-experience'
 const STUDIO_PAGE = 'https://view.ceros.com/myaccount/studio-experience/p/1'
 
 // `url` mirrors fetch's Response.url — the final URL after any redirects —
-// so tests can simulate a HEAD landing off-host.
-function headResponse(headers: Record<string, string>, url: string = FLEX_PAGE) {
+// so tests can simulate a response landing off-host.
+function headResponse(headers: Record<string, string>, url: string = FLEX_PAGE, body = '') {
     return {
         ok: true,
         status: 200,
         url,
         headers: { get: (name: string) => headers[name.toLowerCase()] ?? null },
         json: async () => ({}),
-        text: async () => '',
+        text: async () => body,
     }
+}
+
+const studioPageResponse = (body: string, url: string = STUDIO_PAGE) => headResponse({}, url, body)
+
+// A trimmed, synthetic stand-in for the Studio player page: the experience
+// record sits beside another object carrying its own resourceId (placed first
+// on purpose), and beside a key that merely starts with the record's name.
+function studioPage(record: string) {
+    return (
+        '<html><head><script type="text/javascript">\n' +
+        '    window.cerosContext = {\n' +
+        "        isEmbedded: top != window,\n" +
+        "        issueSlug: 'studio-experience',\n" +
+        '        version: {"id":"2","resourceId":"other-id-9"},\n' +
+        `        issue: ${record},\n` +
+        '        whiteLabeling: true\n' +
+        '    };\n' +
+        '</script></head><body></body></html>'
+    )
+}
+
+// The HEAD and oEmbed responses every Studio resolve starts with; tests chain
+// the page response (the third fetch) onto the returned mock.
+const mockStudioResolve = () =>
+    vi.mocked(fetch)
+        .mockResolvedValueOnce(headResponse({}, STUDIO_PAGE) as any)
+        .mockResolvedValueOnce(jsonOk(STUDIO_OEMBED) as any)
+
+const STUDIO_RECORD = '{"id":"1","name":"Studio Experience","resourceId":"studio-exp-1"}'
+
+const STUDIO_OEMBED = {
+    type: 'rich', url: null, title: 'Studio Experience',
+    html: '<div class="ceros-experience"></div>', embedType: 'full-height',
 }
 
 const MANIFEST_BODY = {
@@ -439,6 +472,49 @@ describe('ceros-api function — resolveExperience', () => {
         expect(data.embedCodes.inline).toBeUndefined()
         // oEmbed's url comes back null, and /p/1 is stripped to the root.
         expect(data.url).toBe('https://view.ceros.com/myaccount/studio-experience')
+    })
+
+    it('returns the Studio experience resourceId read from the page', async () => {
+        mockStudioResolve().mockResolvedValueOnce(studioPageResponse(studioPage(STUDIO_RECORD)) as any)
+
+        const result = await handler(makeEvent({ action: 'resolveExperience', url: STUDIO_PAGE }), makeContext('key') as any)
+        const data = result.data as any
+
+        expect(data.resourceId).toBe('studio-exp-1')
+        expect(data.embedCodes.fullHeight).toContain('ceros-experience')
+    })
+
+    it.each([
+        ['the page fetch rejects', () => Promise.reject(new Error('network down'))],
+        ['the page responds with an error', () => Promise.resolve({ ...studioPageResponse(studioPage(STUDIO_RECORD)), ok: false, status: 500 })],
+        ['the page redirects off-host', () => Promise.resolve(studioPageResponse(studioPage(STUDIO_RECORD), 'https://evil.example/page'))],
+    ])('still resolves a Studio experience, without resourceId, when %s', async (_label, page) => {
+        mockStudioResolve().mockImplementationOnce(page as any)
+
+        const result = await handler(makeEvent({ action: 'resolveExperience', url: STUDIO_PAGE }), makeContext('key') as any)
+        const data = result.data as any
+
+        expect(result.error).toBeUndefined()
+        expect(data.embedCodes.fullHeight).toContain('ceros-experience')
+        expect(data).not.toHaveProperty('resourceId')
+    })
+
+    it('skips the Studio page fetch when the install has no API key to use the id with', async () => {
+        mockStudioResolve()
+
+        const result = await handler(makeEvent({ action: 'resolveExperience', url: STUDIO_PAGE }), makeContext() as any)
+
+        expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2)
+        expect(result.data as any).not.toHaveProperty('resourceId')
+    })
+
+    it('still reads the Studio resourceId on a runtime without AbortSignal', async () => {
+        vi.stubGlobal('AbortSignal', undefined)
+        mockStudioResolve().mockResolvedValueOnce(studioPageResponse(studioPage(STUDIO_RECORD)) as any)
+
+        const result = await handler(makeEvent({ action: 'resolveExperience', url: STUDIO_PAGE }), makeContext('key') as any)
+
+        expect((result.data as any).resourceId).toBe('studio-exp-1')
     })
 
     it('keys a scrollable Studio experience as scrollable, not fullHeight', async () => {
@@ -686,5 +762,31 @@ describe('ceros-api function — whitespace in the pasted URL', () => {
         const result = await handler(makeEvent({ action: 'resolveExperience', url: '   ' }), makeContext() as any)
         expect(String(result.error)).toContain('url is required')
         expect(fetch).not.toHaveBeenCalled()
+    })
+})
+
+describe('experienceResourceIdFromStudioPage', () => {
+    it('reads the experience record\'s resourceId, not another object\'s', () => {
+        expect(experienceResourceIdFromStudioPage(studioPage(STUDIO_RECORD))).toBe('studio-exp-1')
+    })
+
+    it('is not thrown by braces and escaped quotes inside string values', () => {
+        const record = '{"name":"Braces } { and \\"quotes\\"","description":"}}","resourceId":"studio-exp-1"}'
+        expect(experienceResourceIdFromStudioPage(studioPage(record))).toBe('studio-exp-1')
+    })
+
+    it.each([
+        ['no player context', '<script>var issue = {"resourceId":"studio-exp-1"}</script>'],
+        ['no experience record object', '<script>window.cerosContext = { issue: "studio-exp-1" };</script>'],
+        ['unbalanced braces', '<script>window.cerosContext = { issue: {"resourceId":"studio-exp-1"</script>'],
+        ['invalid JSON', '<script>window.cerosContext = { issue: {resourceId: "studio-exp-1"} };</script>'],
+        ['no resourceId', studioPage('{"id":"1","name":"Studio Experience"}')],
+    ])('returns null for a page with %s', (_label, html) => {
+        expect(experienceResourceIdFromStudioPage(html)).toBeNull()
+    })
+
+    it.each(SMUGGLED_IDS)('returns null for a malformed resourceId: %s', (_label, resourceId) => {
+        const record = JSON.stringify({ id: '1', resourceId })
+        expect(experienceResourceIdFromStudioPage(studioPage(record))).toBeNull()
     })
 })
