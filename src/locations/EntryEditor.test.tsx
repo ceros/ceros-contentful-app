@@ -11,7 +11,8 @@ vi.mock('../oembed', async (importOriginal) => ({
     getExperienceMetadata: vi.fn(),
 }))
 
-vi.mock('../vanity', () => ({
+vi.mock('../vanity', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('../vanity')>()),
     resolveVanityToCanonical: vi.fn().mockResolvedValue(null),
 }))
 
@@ -155,10 +156,28 @@ describe('Entry — EmptyState (no linked experience)', () => {
         fireEvent.submit(input.closest('form')!)
 
         await waitFor(() => {
-            expect(screen.getByText(/couldn't find a published Ceros experience/i)).toBeInTheDocument()
+            expect(screen.getByText(/paste its view\.ceros\.com URL instead/i)).toBeInTheDocument()
         })
         expect(mockResolveVanity).toHaveBeenCalledWith('https://invalid.url/thing')
     })
+
+    it.each(['https://look.example.com', 'https://look.example.com/'])(
+        'tells the author to add the experience path when bare domain %s fails',
+        async (url) => {
+            mockResolveVanity.mockResolvedValue(null)
+            render(<Entry />)
+
+            const input = await screen.findByPlaceholderText(/https:\/\/account\.ceros\.site\//i)
+            fireEvent.change(input, { target: { value: url } })
+            fireEvent.submit(input.closest('form')!)
+
+            await waitFor(() => {
+                expect(screen.getByText(/Add the experience path to the URL/i)).toBeInTheDocument()
+            })
+            expect(screen.getByText(/supported for Flex experiences only/i)).toBeInTheDocument()
+            expect(screen.queryByText(/view\.ceros\.com/i)).not.toBeInTheDocument()
+        },
+    )
 })
 
 describe('Entry — EmptyState paste flow', () => {
@@ -315,6 +334,48 @@ describe('Entry — EmptyState paste flow', () => {
         expect(mockCallCerosAction).not.toHaveBeenCalled()
     })
 
+    // Imitates the vanity worker's fallback: an unknown path serves the default experience,
+    // advertising its manifest, and the manifest path serves its HTML.
+    it('refuses a misspelled path on a domain that falls back to its default experience', async () => {
+        const { resolveVanityToCanonical: realResolve } =
+            await vi.importActual<typeof import('../vanity')>('../vanity')
+        mockResolveVanity.mockImplementation(realResolve)
+        const headers = (values: Record<string, string>) => ({
+            get: (name: string) => values[name.toLowerCase()] ?? null,
+        })
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async (_url: string, init?: RequestInit) =>
+                init?.method === 'HEAD'
+                    ? {
+                          ok: true,
+                          status: 200,
+                          headers: headers({
+                              'x-flex-manifest': 'https://myaccount.ceros.site/default-experience/manifest.v1.json',
+                          }),
+                      }
+                    : {
+                          ok: true,
+                          status: 200,
+                          headers: headers({ 'content-type': 'text/html; charset=UTF-8' }),
+                          body: null,
+                          text: async () => '<!doctype html><html></html>',
+                      },
+            ),
+        )
+
+        try {
+            await pasteAndSubmit('https://look.example.com/spring-lanch')
+
+            await waitFor(() =>
+                expect(screen.getByText(/Check that the URL is spelled correctly/i)).toBeInTheDocument()
+            )
+            expect(mockCallCerosAction).not.toHaveBeenCalled()
+        } finally {
+            vi.unstubAllGlobals()
+        }
+    })
+
     it('resolves a vanity URL to its canonical URL before calling the function', async () => {
         mockResolveVanity.mockResolvedValue('https://myaccount.ceros.site/flex-experience')
         mockCallCerosAction.mockResolvedValue({ data: FLEX_MODEL })
@@ -328,6 +389,56 @@ describe('Entry — EmptyState paste flow', () => {
             action: 'resolveExperience',
             url: 'https://myaccount.ceros.site/flex-experience',
         })
+    })
+
+    it.each(['https://look.example.com', 'https://look.example.com/'])(
+        'links the default experience when bare domain %s resolves',
+        async (url) => {
+            mockResolveVanity.mockResolvedValue('https://myaccount.ceros.site/flex-experience')
+            mockCallCerosAction.mockResolvedValue({ data: FLEX_MODEL })
+
+            await pasteAndSubmit(url)
+
+            await waitFor(() => expect(screen.getByText('Fifth Brass Storm')).toBeInTheDocument())
+            expect(mockCallCerosAction).toHaveBeenCalledWith(expect.anything(), 'action-1', {
+                action: 'resolveExperience',
+                url: 'https://myaccount.ceros.site/flex-experience',
+            })
+        },
+    )
+
+    it('saves the same entry from a bare domain as from the full experience URL', async () => {
+        const canonicalUrl = 'https://myaccount.ceros.site/flex-experience'
+        mockResolveVanity.mockResolvedValue(canonicalUrl)
+        // Only the canonical URL resolves, so a bare-domain paste that reached the
+        // function with anything else would never get to the confirmation screen.
+        mockCallCerosAction.mockImplementation(async (_sdk, _id, params) =>
+            params.url === canonicalUrl ? { data: FLEX_MODEL } : { error: 'not found' },
+        )
+
+        const savedFields = async (url: string) => {
+            sdk = makeMockSdk()
+            mockUseSDK.mockReturnValue(sdk as any)
+            const { unmount } = render(<Entry />)
+            const input = await screen.findByPlaceholderText(/https:\/\/account\.ceros\.site\//i)
+            fireEvent.change(input, { target: { value: url } })
+            fireEvent.submit(input.closest('form')!)
+
+            await waitFor(() => expect(screen.getByText('Fifth Brass Storm')).toBeInTheDocument())
+            fireEvent.click(screen.getByRole('button', { name: /^insert$/i }))
+            await waitFor(() => expect(sdk.entry.save).toHaveBeenCalled())
+
+            const { title, url: urlField, embedCode } = sdk.entry.fields
+            const fields = [title, urlField, embedCode].map((f) => f.setValue.mock.calls)
+            unmount()
+            return fields
+        }
+
+        const fromBareDomain = await savedFields('https://look.example.com')
+        const fromFullUrl = await savedFields(canonicalUrl)
+
+        expect(fromBareDomain).toEqual(fromFullUrl)
+        expect(fromBareDomain.every((calls) => calls.length > 0)).toBe(true)
     })
 
     it('does not attempt vanity resolution for a known Ceros host', async () => {
