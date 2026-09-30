@@ -163,6 +163,15 @@ function pastedSlug(url: URL): string | null {
     return experiencePath(url).split('/').filter(Boolean)[0] ?? null
 }
 
+// The experience segment of a URL's path, or null for a bare domain or an unparseable URL.
+export function experienceSlug(pastedUrl: string): string | null {
+    try {
+        return pastedSlug(new URL(pastedUrl.trim()))
+    } catch {
+        return null
+    }
+}
+
 // resolveVanityToCanonical cannot say why it returned null; callers use this to tell a
 // bare domain apart when picking the message.
 export function hasExperiencePath(pastedUrl: string): boolean {

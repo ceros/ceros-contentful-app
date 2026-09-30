@@ -544,9 +544,9 @@ describe('Entry — LinkedState refresh and embed style', () => {
 
     let sdk: ReturnType<typeof makeLinkedSdk>
 
-    const renderLinked = async (storedEmbedCode: string) => {
+    const renderLinked = async (storedEmbedCode: string, storedUrl = 'https://myaccount.ceros.site/flex-experience') => {
         sdk = makeLinkedSdk(storedEmbedCode)
-        sdk.entry.fields.url.getValue.mockReturnValue('https://myaccount.ceros.site/flex-experience')
+        sdk.entry.fields.url.getValue.mockReturnValue(storedUrl)
         mockUseSDK.mockReturnValue(sdk as any)
         render(<Entry />)
         await screen.findByRole('button', { name: /refresh embed code/i })
@@ -840,6 +840,89 @@ describe('Entry — LinkedState refresh and embed style', () => {
 
             await waitFor(() => expect(screen.getByLabelText(/full height/i)).toBeChecked())
             expect(screen.queryByLabelText(/scrollable/i)).not.toBeInTheDocument()
+        })
+    })
+
+    describe('entries linked through a custom domain', () => {
+        const CUSTOM_URL = 'https://experiences.example.com/studio-experience'
+        const CUSTOM_STUDIO_EMBED =
+            '<div><iframe src="https://experiences.example.com/studio-experience" class="ceros-experience" scrolling="no"></iframe></div>'
+        const resolveCalls = () =>
+            mockCallCerosAction.mock.calls.filter(([, , params]: any[]) => params.action === 'resolveExperience')
+
+        // Earlier suites leave a persistent vanity result behind; clearAllMocks keeps it.
+        beforeEach(() => mockResolveVanity.mockResolvedValue(null))
+
+        it.each([
+            ['Refresh Embed Code', /refresh embed code/i],
+            ['Change embed style', /change embed style/i],
+        ])('%s explains a Studio custom domain it cannot reach, with the view.ceros.com address to paste', async (_label, button) => {
+            await renderLinked(CUSTOM_STUDIO_EMBED, CUSTOM_URL)
+
+            fireEvent.click(screen.getByRole('button', { name: button }))
+
+            await waitFor(() => expect(screen.getByText(/which Refresh can't reach/i)).toBeInTheDocument())
+            expect(screen.getByText(CUSTOM_URL, { exact: false })).toBeInTheDocument()
+            expect(screen.getByText(/https:\/\/view\.ceros\.com\/<account>\/studio-experience/)).toBeInTheDocument()
+            expect(screen.queryByText(/error refreshing/i)).not.toBeInTheDocument()
+            expect(resolveCalls()).toHaveLength(0)
+            // A Studio page can never translate to a Flex canonical URL, so no
+            // browser discovery is attempted.
+            expect(mockResolveVanity).not.toHaveBeenCalled()
+            expect(sdk.entry.fields.embedCode.setValue).not.toHaveBeenCalled()
+        })
+
+        it('keeps the refresh error for a Flex vanity URL that fails to translate', async () => {
+            // Flex vanity URLs normally translate, so a failure means something
+            // like an unpublished experience — not a domain Refresh can never reach.
+            await renderLinked(IFRAME_SNIPPET, 'https://look.example.com/flex-experience')
+
+            fireEvent.click(screen.getByRole('button', { name: /refresh embed code/i }))
+
+            await waitFor(() => expect(screen.getByText(/error refreshing/i)).toBeInTheDocument())
+            expect(screen.queryByText(/which Refresh can't reach/i)).not.toBeInTheDocument()
+        })
+
+        it('suggests a view.ceros.com address with a placeholder when the Studio custom-domain URL has no path', async () => {
+            await renderLinked(CUSTOM_STUDIO_EMBED, 'https://experiences.example.com/')
+
+            fireEvent.click(screen.getByRole('button', { name: /refresh embed code/i }))
+
+            await waitFor(() =>
+                expect(screen.getByText(/https:\/\/view\.ceros\.com\/<account>\/<experience>/)).toBeInTheDocument()
+            )
+        })
+
+        it('shows the refresh error, not a blank screen, when the entry has no stored URL', async () => {
+            await renderLinked(CUSTOM_STUDIO_EMBED, '')
+
+            fireEvent.click(screen.getByRole('button', { name: /refresh embed code/i }))
+
+            await waitFor(() => expect(screen.getByText(/error refreshing/i)).toBeInTheDocument())
+        })
+
+        it('refreshes a Flex entry on a vanity domain through its canonical URL', async () => {
+            mockResolveVanity.mockResolvedValueOnce('https://myaccount.ceros.site/flex-experience')
+            mockCallCerosAction.mockResolvedValue({ data: RESOLVED })
+            await renderLinked(IFRAME_SNIPPET, 'https://look.example.com/flex-experience')
+
+            fireEvent.click(screen.getByRole('button', { name: /refresh embed code/i }))
+
+            await waitFor(() => expect(sdk.entry.fields.embedCode.setValue).toHaveBeenCalledWith(IFRAME_SNIPPET))
+            expect(resolveCalls()[0][2]).toEqual({
+                action: 'resolveExperience',
+                url: 'https://myaccount.ceros.site/flex-experience',
+            })
+        })
+
+        it('does not translate an entry already on a Ceros host', async () => {
+            mockCallCerosAction.mockResolvedValue({ data: RESOLVED })
+            await renderLinked(IFRAME_SNIPPET)
+
+            fireEvent.click(screen.getByRole('button', { name: /refresh embed code/i }))
+
+            await waitFor(() => expect(sdk.entry.fields.embedCode.setValue).toHaveBeenCalledWith(IFRAME_SNIPPET))
+            expect(mockResolveVanity).not.toHaveBeenCalled()
         })
     })
 

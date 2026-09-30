@@ -32,13 +32,17 @@ export function classifyEmbed(embedCode: string): EmbedKind {
 // two agree on what a Studio embed is.
 const STUDIO_CLASS = /\sclass=["']ceros-experience["']/i
 
+export function isStudioEmbed(embedCode: string): boolean {
+    return STUDIO_CLASS.test(embedCode)
+}
+
 // A Studio account publishing through a custom domain gets iframe codes on that
 // domain rather than view.ceros.com, and custom domains can be any host — so
 // the marker is STUDIO_CLASS on an https iframe, not the host. Matched strictly
 // because an iframe-kind code is rendered with its scripts live in EmbedPreview.
 function isStudioIframeOnAnyHost(embedCode: string): boolean {
     return (embedCode.match(/<iframe\b[^>]*>/gi) ?? []).some(
-        (tag) => STUDIO_CLASS.test(tag) && /\ssrc=["']https:\/\//i.test(tag)
+        (tag) => isStudioEmbed(tag) && /\ssrc=["']https:\/\//i.test(tag)
     )
 }
 
@@ -80,7 +84,7 @@ export function classifyVariant(embedCode: string): EmbedVariant | null {
     // Studio's marker is an attribute whose ABSENCE is meaningful, so it is
     // only safe to read on markup known to be a Studio embed. A Flex iframe
     // snippet with no data-embed-height at all falls through to null instead.
-    if (STUDIO_CLASS.test(embedCode)) {
+    if (isStudioEmbed(embedCode)) {
         return /\bscrolling=["']no["']/i.test(embedCode) ? 'fullHeight' : 'scrollable'
     }
 
