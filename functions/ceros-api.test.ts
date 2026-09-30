@@ -136,30 +136,31 @@ describe('ceros-api function — getFolderExperiences request', () => {
 // dot segments when it parses. The picker UI never sends such a value, but the
 // app action is CMA-invokable, exactly like the pasted-URL host gate above, so
 // the segment has to be validated here rather than trusted from the caller.
+
+// A dot-segment escape, the encoded form of one, and every character class
+// that could otherwise split a path, open a query, start a fragment, or
+// introduce percent-encoding. `%2f` matters on its own: it does NOT get
+// normalised by new URL(), so it survives to the origin, where the gateway
+// may decode it — which is why the guard is a character-class allowlist
+// rather than a check for literal '/'.
+const SMUGGLED_IDS: Array<[string, string]> = [
+    ['dot-segment escape', '../accounts/current-account'],
+    ['nested dot-segment escape', '../../accounts/current-account'],
+    ['encoded slash', '..%2f..%2faccounts'],
+    ['literal slash', 'f1/experiences/other'],
+    ['query injection', 'f1?filter=draft'],
+    ['fragment injection', 'f1#frag'],
+    ['percent encoding', 'f1%2e%2e'],
+    ['bare dot segment', '.'],
+    ['leading slash', '/accounts'],
+    ['whitespace', 'f1 f2'],
+    ['newline', 'f1\nf2'],
+    ['empty string', ''],
+]
+
 describe('ceros-api function — path segment validation', () => {
     beforeEach(() => vi.stubGlobal('fetch', vi.fn()))
     afterEach(() => vi.unstubAllGlobals())
-
-    // A dot-segment escape, the encoded form of one, and every character class
-    // that could otherwise split a path, open a query, start a fragment, or
-    // introduce percent-encoding. `%2f` matters on its own: it does NOT get
-    // normalised by new URL(), so it survives to the origin, where the gateway
-    // may decode it — which is why the guard is a character-class allowlist
-    // rather than a check for literal '/'.
-    const SMUGGLED_IDS: Array<[string, string]> = [
-        ['dot-segment escape', '../accounts/current-account'],
-        ['nested dot-segment escape', '../../accounts/current-account'],
-        ['encoded slash', '..%2f..%2faccounts'],
-        ['literal slash', 'f1/experiences/other'],
-        ['query injection', 'f1?filter=draft'],
-        ['fragment injection', 'f1#frag'],
-        ['percent encoding', 'f1%2e%2e'],
-        ['bare dot segment', '.'],
-        ['leading slash', '/accounts'],
-        ['whitespace', 'f1 f2'],
-        ['newline', 'f1\nf2'],
-        ['empty string', ''],
-    ]
 
     describe('getFolderExperiences rejects a smuggled folderId before any request', () => {
         it.each(SMUGGLED_IDS)('%s', async (_label, folderId) => {
@@ -362,6 +363,28 @@ describe('ceros-api function — resolveExperience', () => {
 
         const result = await handler(makeEvent({ action: 'resolveExperience', url: FLEX_PAGE }), makeContext() as any)
         expect((result.data as any).name).toBe('flex-experience')
+    })
+
+    it('returns the manifest experienceResourceId as resourceId', async () => {
+        vi.mocked(fetch)
+            .mockResolvedValueOnce(headResponse({ 'x-flex-manifest': MANIFEST_URL }) as any)
+            .mockResolvedValueOnce(jsonOk(MANIFEST_BODY) as any)
+
+        const result = await handler(makeEvent({ action: 'resolveExperience', url: FLEX_PAGE }), makeContext() as any)
+        expect((result.data as any).resourceId).toBe('exp-123')
+    })
+
+    describe('omits a missing or malformed manifest experienceResourceId', () => {
+        it.each([...SMUGGLED_IDS, ['absent', undefined]])('%s', async (_label, experienceResourceId) => {
+            vi.mocked(fetch)
+                .mockResolvedValueOnce(headResponse({ 'x-flex-manifest': MANIFEST_URL }) as any)
+                .mockResolvedValueOnce(
+                    jsonOk({ ...MANIFEST_BODY, experience: { ...MANIFEST_BODY.experience, experienceResourceId } }) as any
+                )
+
+            const result = await handler(makeEvent({ action: 'resolveExperience', url: FLEX_PAGE }), makeContext() as any)
+            expect(result.data as any).not.toHaveProperty('resourceId')
+        })
     })
 
     it('falls back to the URL slug when oEmbed returns no title', async () => {
