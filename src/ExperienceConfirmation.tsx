@@ -19,8 +19,9 @@ export interface ConfirmationModel {
     // Set when the Flex branch resolved but could not read an inline snippet,
     // so the screen can explain the missing option instead of silently hiding it.
     inlineUnavailable?: boolean
-    // The Flex manifest's experience id, used to ask the REST embed codes for
-    // the scrollable snippet the manifest itself lacks.
+    // The experience's REST id (from the Flex manifest or the Studio page),
+    // used to ask the REST embed codes for a scrollable snippet
+    // resolveExperience could not offer.
     resourceId?: string
 }
 

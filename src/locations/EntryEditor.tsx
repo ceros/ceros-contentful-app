@@ -15,11 +15,11 @@ import React, { Dispatch, useEffect, useState } from 'react'
 import cerosLogo from '../assets/ceros-logo.svg'
 import styles from '../styles'
 import { isKnownCerosHost, isPasteableUrl } from '../oembed'
-import { hasExperiencePath, resolveVanityToCanonical } from '../vanity'
+import { experienceSlug, hasExperiencePath, resolveVanityToCanonical } from '../vanity'
 import { AppInstallationParameters } from './ConfigScreen'
 import tokens from '@contentful/f36-tokens'
 import { ExperiencePicker, SelectedExperience } from './ExperiencePicker'
-import { classifyEmbed, classifyVariant, EmbedKind } from '../embed-classify'
+import { classifyEmbed, classifyVariant, EmbedKind, isStudioEmbed } from '../embed-classify'
 import { EmbedPreview } from '../EmbedPreview'
 import { callCerosAction, findCerosActionId } from '../ceros-action'
 import { ConfirmationModel, EmbedVariant, ExperienceConfirmation } from '../ExperienceConfirmation'
@@ -65,6 +65,31 @@ const BARE_DOMAIN_ERROR =
     "We couldn't find a published Ceros experience at that domain. Add the experience path to the " +
     'URL — for example https://look.example.com/spring-launch. Custom domains are currently ' +
     'supported for Flex experiences only.'
+
+class UnreachableCustomDomainError extends Error {
+    constructor(readonly url: string) {
+        super(`Cannot resolve an experience on the custom domain ${url}`)
+    }
+}
+
+// The view.ceros.com address can be spelled out except for the account, which
+// nothing the app can read supplies — so the author is told what to ask for.
+function unreachableCustomDomainMessage(url: string): string {
+    return (
+        `This experience is linked through its custom domain, ${url}, which Refresh can't reach. ` +
+        'To refresh it, unlink it and paste its view.ceros.com address instead: ' +
+        `https://view.ceros.com/<account>/${experienceSlug(url) ?? '<experience>'}, replacing <account> ` +
+        "with your Ceros account. If you're not sure what that is, your Ceros admin or Ceros support can tell you."
+    )
+}
+
+// A known Ceros host needs no discovery — resolveExperience HEADs it and reads
+// x-flex-manifest itself. Anything else is translated to its canonical URL in
+// the browser, because the function cannot fetch an arbitrary host at all
+// (allowNetworks cannot express one). null means it could not be translated.
+async function toResolvableUrl(url: string): Promise<string | null> {
+    return isKnownCerosHost(url) ? url : resolveVanityToCanonical(url)
+}
 
 interface StateProps {
     entry: EntryAPI
@@ -140,20 +165,9 @@ function EmptyState({ entry, setLinked, parameters }: StateProps) {
 
         setLoading(true)
         try {
-            // A known Ceros host needs no discovery — resolveExperience HEADs it and
-            // reads x-flex-manifest itself — so this path stays request-for-request
-            // what it was before vanity domains existed. Anything else is translated
-            // to its canonical URL first, in the browser, because the function cannot
-            // fetch an arbitrary host at all (allowNetworks cannot express one).
-            let resolvableUrl = url
-            if (!isKnownCerosHost(url)) {
-                const canonicalUrl = await resolveVanityToCanonical(url)
-                if (!canonicalUrl) {
-                    throw new Error(
-                        hasExperiencePath(url) ? UNRECOGNISED_URL_ERROR : BARE_DOMAIN_ERROR,
-                    )
-                }
-                resolvableUrl = canonicalUrl
+            const resolvableUrl = await toResolvableUrl(url)
+            if (!resolvableUrl) {
+                throw new Error(hasExperiencePath(url) ? UNRECOGNISED_URL_ERROR : BARE_DOMAIN_ERROR)
             }
 
             const actionId = await findCerosActionId(sdk)
@@ -300,6 +314,9 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
     // the experience resolved fine, and from isSaveError because nothing was
     // written.
     const [styleUnavailable, setStyleUnavailable] = useState<EmbedVariant | null>(null)
+    // Set when a Studio entry's stored URL is on a custom domain, which neither
+    // the browser translation nor the function can reach — nothing is resolved.
+    const [unreachableUrl, setUnreachableUrl] = useState<string | null>(null)
 
     // State for the embed code
     const [embedCode, setEmbedCode] = useState(entry.fields[parameters.embedCodeFieldId].getValue())
@@ -312,18 +329,20 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
     const [styleLoading, setStyleLoading] = useState(false)
     const [applyingStyle, setApplyingStyle] = useState(false)
 
-    // The Flex manifest carries no scrollable snippet, but the REST embed codes
-    // do, keyed by the id the manifest does carry. Any failure — no key, API
-    // error, no snippet — yields undefined, leaving the manifest's styles as
-    // the whole offer rather than failing the resolve.
-    const fetchFlexScrollable = async (resourceId: string, actionId: string): Promise<string | undefined> => {
+    // resolveExperience can't always offer Scrollable — the Flex manifest has no
+    // scrollable snippet, and Studio's oEmbed returns only Full height when an
+    // experience offers both — but the REST embed codes can, keyed by the
+    // resourceId resolveExperience found. Any failure — no key, API error, no
+    // snippet — yields undefined, leaving the resolved styles as the whole
+    // offer rather than failing the resolve.
+    const fetchRestScrollable = async (resourceId: string, actionId: string): Promise<string | undefined> => {
         try {
             const res = await callCerosAction(sdk, actionId, { action: 'getEmbedCode', resourceId })
-            if (res.error) console.warn('Could not fetch the Flex scrollable embed code:', res.error)
+            if (res.error) console.warn('Could not fetch the scrollable embed code:', res.error)
             const code = res.data?.scrollableEmbedCode
             return typeof code === 'string' ? code : undefined
         } catch (err) {
-            console.warn('Could not fetch the Flex scrollable embed code:', err)
+            console.warn('Could not fetch the scrollable embed code:', err)
             return undefined
         }
     }
@@ -331,14 +350,24 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
     // Resolves the linked experience's currently-available variants. Shared by
     // refresh and "Change embed style" so both see the same set.
     const resolveLinked = async (): Promise<ConfirmationModel> => {
-        const experienceUrl = entry.fields[parameters.urlFieldId].getValue()
+        const storedUrl = entry.fields[parameters.urlFieldId].getValue()
+        if (!storedUrl?.trim()) throw new Error('This entry has no stored experience URL.')
+        // The picker stores the API's viewUrl, which is the account's custom
+        // domain when it has one. A Studio page can never be translated
+        // (discovery reads a Flex-only header) and the function can't fetch it,
+        // so say that instead of reporting a broken experience. A Flex vanity
+        // URL is translated as paste does; if that fails, the usual refresh
+        // error applies, since translation normally succeeds.
+        if (!isKnownCerosHost(storedUrl) && isStudioEmbed(embedCode)) throw new UnreachableCustomDomainError(storedUrl)
+        const experienceUrl = await toResolvableUrl(storedUrl)
+        if (!experienceUrl) throw new Error(`Could not translate ${storedUrl} to a Ceros URL.`)
         const actionId = await findCerosActionId(sdk)
         const res = await callCerosAction(sdk, actionId, { action: 'resolveExperience', url: experienceUrl })
         if (res.error) throw new Error(String(res.error))
         const model = res.data as ConfirmationModel
         if (!model?.embedCodes) throw new Error('No embed code could be generated for this experience.')
         if (model.resourceId && !model.embedCodes.scrollable) {
-            const scrollable = await fetchFlexScrollable(model.resourceId, actionId)
+            const scrollable = await fetchRestScrollable(model.resourceId, actionId)
             if (scrollable) return { ...model, embedCodes: { ...model.embedCodes, scrollable } }
         }
         return model
@@ -400,6 +429,7 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
         setIsRefreshError(false)
         setIsSaveError(false)
         setStyleUnavailable(null)
+        setUnreachableUrl(null)
         // Distinguishes a save failure (routed to isSaveError below) from every
         // other failure in this function (routed to isRefreshError), without
         // losing that distinction if the rollback setValue itself throws.
@@ -435,7 +465,9 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
         } catch (err) {
             // Leave the stored value untouched on every failure path.
             console.error('Failed to refresh embed code:', err)
-            if (saveFailed) {
+            if (err instanceof UnreachableCustomDomainError) {
+                setUnreachableUrl(err.url)
+            } else if (saveFailed) {
                 // A version conflict or transient save failure — not a sign the
                 // experience is unpublished, so never suggest unlinking here.
                 setIsSaveError(true)
@@ -452,11 +484,13 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
         setIsRefreshError(false)
         setIsSaveError(false)
         setStyleUnavailable(null)
+        setUnreachableUrl(null)
         try {
             setConfirming(await resolveLinked())
         } catch (err) {
             console.error('Failed to resolve experience:', err)
-            setIsRefreshError(true)
+            if (err instanceof UnreachableCustomDomainError) setUnreachableUrl(err.url)
+            else setIsRefreshError(true)
         } finally {
             setStyleLoading(false)
         }
@@ -497,6 +531,12 @@ function LinkedState({ entry, setLinked, parameters }: StateProps) {
 
     return (
         <>
+            {unreachableUrl && (
+                <Box marginBottom="spacingXl">
+                    <Note variant="warning">{unreachableCustomDomainMessage(unreachableUrl)}</Note>
+                </Box>
+            )}
+
             {isRefreshError && (
                 <Box marginBottom="spacingXl">
                     <Note variant="negative">
